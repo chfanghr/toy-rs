@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, LinkedList},
+    iter,
     rc::Rc,
 };
 
@@ -256,28 +257,38 @@ impl Machine {
     }
 
     fn handle_super_comb_node(&mut self, n: &SuperCombinatorNode) -> Result<(), String> {
-        let _super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
+        let super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
         let num_args = n.0.arguments.len();
-        let env_args = self
-            .stack
-            .pop_n_releaxed(num_args)
-            .into_iter()
-            .zip(n.0.arguments.clone())
-            .map(
-                |(addr, name)| match *self.heap.access(addr).unwrap().borrow() {
-                    Node::Ap(ref ap_node) => Ok((name, ap_node.r)),
-                    _ => Err("expected ap node".to_string()),
-                },
-            )
-            .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
-            .into_iter()
-            .fold(Assoc::new(), |mut a, (name, addr)| {
-                a.insert(name, addr);
-                a
-            });
-        let env = Assoc::combine(self.globals.clone(), env_args);
-        let addr = self.instantiate(&env, &n.0.body, None)?;
-        self.stack.push(addr);
+        let ap_node_addrs = self.stack.pop_n_releaxed(num_args);
+
+        let addr = {
+            let env_args = ap_node_addrs
+                .iter()
+                .zip(n.0.arguments.clone())
+                .map(
+                    |(addr, name)| match *self.heap.access(*addr).unwrap().borrow() {
+                        Node::Ap(ref ap_node) => Ok((name, ap_node.r)),
+                        _ => Err("expected ap node".to_string()),
+                    },
+                )
+                .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
+                .into_iter()
+                .fold(Assoc::new(), |mut a, (name, addr)| {
+                    a.insert(name, addr);
+                    a
+                });
+            let env = Assoc::combine(self.globals.clone(), env_args);
+            let addr = self.instantiate(&env, &n.0.body, None)?;
+            self.stack.push(addr);
+            addr
+        };
+
+        let node_addr_to_update = iter::once(super_comb_node_addr)
+            .chain(ap_node_addrs)
+            .last()
+            .unwrap();
+        self.replace_node_at(node_addr_to_update, Node::Indirect(addr));
+
         Ok(())
     }
 
@@ -285,14 +296,19 @@ impl Machine {
         self.heap.alloc(Node::new_in_rc_refcell(n))
     }
 
-    fn replace_dummy_node_at(&mut self, a: Addr, n: Node) -> Result<Addr, String> {
-        let mut node = self.heap.access_mut(a).unwrap().borrow_mut();
-        if node.is_dummy_node() {
-            *node = n;
-            Ok(a)
+    fn replace_dummy_node_at(&mut self, a: Addr, n: Node) -> Result<(), String> {
+        let is_dummy_node = self.heap.access(a).unwrap().borrow().is_dummy_node();
+
+        if is_dummy_node {
+            self.replace_node_at(a, n);
+            Ok(())
         } else {
-            Err("trying to replace a node that is not dummy".to_string())
+            Err(format!("expected node at {:?} to be a dummy node", a))
         }
+    }
+
+    fn replace_node_at(&mut self, a: Addr, n: Node) {
+        *self.heap.access_mut(a).unwrap() = Node::new_in_rc_refcell(n);
     }
 
     fn instantiate(
@@ -359,7 +375,10 @@ impl Machine {
         };
 
         let addr = match (alloc_at, node) {
-            (Some(addr), node) => self.replace_dummy_node_at(addr, node)?,
+            (Some(addr), node) => {
+                self.replace_dummy_node_at(addr, node)?;
+                addr
+            }
             (None, Node::Indirect(addr)) => addr,
             (None, node) => self.alloc_node(node),
         };

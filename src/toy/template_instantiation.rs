@@ -163,6 +163,7 @@ impl Stats {
 #[derive(Debug, Clone)]
 pub struct Machine {
     pub stack: Stack<Addr>,
+    pub dump: Stack<Stack<Addr>>,
     pub heap: Heap<Rc<RefCell<Node>>>,
     pub globals: Assoc<ast::Name, Addr>,
     pub stats: Stats,
@@ -175,9 +176,11 @@ pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
         .ok_or("main".to_string())?;
     let mut stack = Stack::new();
     stack.push(main_addr);
+    let dump = Stack::new();
     let stats = Stats::new();
     Ok(Machine {
         stack,
+        dump,
         heap,
         globals,
         stats,
@@ -211,6 +214,7 @@ impl Machine {
 
     pub fn eval(&mut self) -> Result<(), String> {
         while !self.is_done()? {
+            println!("{:#?}\n", self);
             self.eval_step()?;
             self.do_admin();
         }
@@ -290,6 +294,17 @@ impl Machine {
         *self.heap.access_mut(a).unwrap() = Node::new_in_rc_refcell(n);
     }
 
+    fn replace_or_alloc_node_at(&mut self, replace_at: Option<Addr>, node: Node) -> Addr {
+        match (replace_at, node) {
+            (Some(addr), node) => {
+                self.replace_node_at(addr, node);
+                addr
+            }
+            (None, Node::Indirect(addr)) => addr,
+            (None, n) => self.alloc_node(n),
+        }
+    }
+
     fn instantiate(
         &mut self,
         env: &Assoc<ast::Name, Addr>,
@@ -297,18 +312,23 @@ impl Machine {
         // To handle recursive let where we need to know the binder's addr before instatiating the respective expression.
         replace_at: Option<Addr>,
     ) -> Result<Addr, String> {
-        let node = match expr {
-            ast::Expr::Num(n) => Node::Num(IntegerNode::new(n.0)),
+        match expr {
+            ast::Expr::Num(n) => {
+                Ok(self.replace_or_alloc_node_at(replace_at, Node::Num(IntegerNode::new(n.0))))
+            }
             ast::Expr::Ap(ap) => {
                 let l_addr = self.instantiate(env, &ap.l, None)?;
                 let r_addr = self.instantiate(env, &ap.r, None)?;
-                Node::Ap(ApplicationNode::new(l_addr, r_addr))
+                Ok(self.replace_or_alloc_node_at(
+                    replace_at,
+                    Node::Ap(ApplicationNode::new(l_addr, r_addr)),
+                ))
             }
-            ast::Expr::Var(v) => Node::Indirect(
-                env.lookup(v)
-                    .copied()
-                    .ok_or(format!("variable {:?} not found", v))?,
-            ),
+            ast::Expr::Var(v) => env
+                .lookup(v)
+                .copied()
+                .ok_or(format!("variable {:?} not found", v))
+                .map(|a| self.replace_or_alloc_node_at(replace_at, Node::Indirect(a))),
             ast::Expr::Let(l) => {
                 let preallocated_binders = l.is_recursive.then(|| {
                     l.definitions
@@ -345,21 +365,11 @@ impl Machine {
                 let env = Assoc::combine(env.clone(), binders);
                 let env = &env;
 
-                let addr = self.instantiate(env, &l.body, replace_at)?;
-                Node::Indirect(addr)
+                self.instantiate(env, &l.body, replace_at)
             }
             // FIXME
-            e => Err(format!("cannot instantiate this variant yet: {:?}", e))?,
-        };
-
-        Ok(match (replace_at, node) {
-            (Some(a), node) => {
-                self.replace_node_at(a, node);
-                a
-            }
-            (None, Node::Indirect(addr)) => addr,
-            (None, n) => self.alloc_node(n),
-        })
+            e => Err(format!("cannot instantiate this variant yet: {:?}", e)),
+        }
     }
 
     fn is_done(&self) -> Result<bool, String> {

@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, LinkedList},
-    iter,
     rc::Rc,
 };
 
@@ -144,13 +143,6 @@ impl Node {
             _ => false,
         }
     }
-
-    fn is_dummy_node(&self) -> bool {
-        match self {
-            Node::Dummy => true,
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -260,51 +252,38 @@ impl Machine {
         let super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
         let num_args = n.0.arguments.len();
         let ap_node_addrs = self.stack.pop_n_releaxed(num_args);
-
-        let addr = {
-            let env_args = ap_node_addrs
-                .iter()
-                .zip(n.0.arguments.clone())
-                .map(
-                    |(addr, name)| match *self.heap.access(*addr).unwrap().borrow() {
-                        Node::Ap(ref ap_node) => Ok((name, ap_node.r)),
-                        _ => Err("expected ap node".to_string()),
-                    },
-                )
-                .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
-                .into_iter()
-                .fold(Assoc::new(), |mut a, (name, addr)| {
-                    a.insert(name, addr);
-                    a
-                });
-            let env = Assoc::combine(self.globals.clone(), env_args);
-            let addr = self.instantiate(&env, &n.0.body, None)?;
-            self.stack.push(addr);
-            addr
+        let node_addr_to_update = if num_args == 0 {
+            super_comb_node_addr
+        } else {
+            *ap_node_addrs.last().unwrap()
         };
 
-        let node_addr_to_update = iter::once(super_comb_node_addr)
-            .chain(ap_node_addrs)
-            .last()
-            .unwrap();
-        self.replace_node_at(node_addr_to_update, Node::Indirect(addr));
+        let env_args = ap_node_addrs
+            .iter()
+            .zip(n.0.arguments.clone())
+            .map(
+                |(addr, name)| match *self.heap.access(*addr).unwrap().borrow() {
+                    Node::Ap(ref ap_node) => Ok((name, ap_node.r)),
+                    _ => Err("expected ap node".to_string()),
+                },
+            )
+            .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
+            .into_iter()
+            .fold(Assoc::new(), |mut a, (name, addr)| {
+                a.insert(name, addr);
+                a
+            });
+        let env = Assoc::combine(self.globals.clone(), env_args);
+        let addr = self.instantiate(&env, &n.0.body, Some(node_addr_to_update))?;
+
+        assert_eq!(addr, node_addr_to_update);
+        self.stack.push(addr);
 
         Ok(())
     }
 
     fn alloc_node(&mut self, n: Node) -> Addr {
         self.heap.alloc(Node::new_in_rc_refcell(n))
-    }
-
-    fn replace_dummy_node_at(&mut self, a: Addr, n: Node) -> Result<(), String> {
-        let is_dummy_node = self.heap.access(a).unwrap().borrow().is_dummy_node();
-
-        if is_dummy_node {
-            self.replace_node_at(a, n);
-            Ok(())
-        } else {
-            Err(format!("expected node at {:?} to be a dummy node", a))
-        }
     }
 
     fn replace_node_at(&mut self, a: Addr, n: Node) {
@@ -316,7 +295,7 @@ impl Machine {
         env: &Assoc<ast::Name, Addr>,
         expr: &ast::Expr<ast::Name>,
         // To handle recursive let where we need to know the binder's addr before instatiating the respective expression.
-        alloc_at: Option<Addr>,
+        replace_at: Option<Addr>,
     ) -> Result<Addr, String> {
         let node = match expr {
             ast::Expr::Num(n) => Node::Num(IntegerNode::new(n.0)),
@@ -366,24 +345,21 @@ impl Machine {
                 let env = Assoc::combine(env.clone(), binders);
                 let env = &env;
 
-                let addr = self.instantiate(env, &l.body, alloc_at)?;
-
+                let addr = self.instantiate(env, &l.body, replace_at)?;
                 Node::Indirect(addr)
             }
             // FIXME
             e => Err(format!("cannot instantiate this variant yet: {:?}", e))?,
         };
 
-        let addr = match (alloc_at, node) {
-            (Some(addr), node) => {
-                self.replace_dummy_node_at(addr, node)?;
-                addr
+        Ok(match (replace_at, node) {
+            (Some(a), node) => {
+                self.replace_node_at(a, node);
+                a
             }
             (None, Node::Indirect(addr)) => addr,
-            (None, node) => self.alloc_node(node),
-        };
-
-        Ok(addr)
+            (None, n) => self.alloc_node(n),
+        })
     }
 
     fn is_done(&self) -> Result<bool, String> {

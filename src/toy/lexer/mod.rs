@@ -13,6 +13,7 @@ use nom::{
     },
     combinator::{all_consuming, complete, value},
     multi::separated_list0,
+    sequence::delimited,
     AsChar, IResult, Parser,
 };
 use std::iter;
@@ -100,5 +101,10 @@ fn token(i: &str) -> IResult<&str, Token> {
 }
 
 pub fn token_vec(i: &str) -> nom::IResult<&str, Vec<Token>> {
-    all_consuming(separated_list0(multispace0, complete(token))).parse(i)
+    all_consuming(delimited(
+        multispace0,
+        separated_list0(multispace0, complete(token)),
+        multispace0,
+    ))
+    .parse(i)
 }

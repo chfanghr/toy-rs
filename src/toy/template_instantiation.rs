@@ -272,10 +272,10 @@ impl Machine {
                     break;
                 }
                 self.pop_stack_frame();
-            }
-
-            self.eval_step()?;
-            self.do_admin();
+            } else {
+                self.eval_step()?;
+                self.do_admin();
+            };
         }
         Ok(())
     }
@@ -348,7 +348,7 @@ impl Machine {
             .into_iter()
             .map(
                 |addr| match self.heap.access(addr).unwrap().borrow().deref() {
-                    Node::Ap(ap) => ap.r,
+                    Node::Ap(ap) => self.follow_indirect(ap.r),
                     node => panic!("BUG: expected Ap node, got {:?}", node),
                 },
             )

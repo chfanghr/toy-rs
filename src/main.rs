@@ -18,9 +18,8 @@ fn main() -> Result<(), String> {
         .map_or(DEMO_PROGRAM, |c| c.as_str());
     let p = toy::parse_program(source_file_content)?;
     let mut machine = toy::template_instantiation::Machine::new(p)?;
-    machine.eval()?;
-    // println!("{:#?}", machine);
-    // println!("{:#?}", machine.stats);
+    machine.eval(None)?;
+    eprintln!("{:#?}", machine);
     println!("{:#?}", machine.peak_node().borrow());
     Ok(())
 }

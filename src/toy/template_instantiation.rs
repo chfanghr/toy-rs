@@ -196,11 +196,11 @@ pub struct Machine {
 
 pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
     let (heap, globals) = build_initial_heap(p.0);
-    let main_addr = *globals
-        .lookup(&ast::Name::new("main"))
-        .ok_or("main function missing".to_string())?;
-    let mut stack = Stack::new();
-    stack.push(main_addr);
+    // let main_addr = *globals
+    //     .lookup(&ast::Name::new("main"))
+    //     .ok_or("main function missing".to_string())?;
+    let stack = Stack::new();
+    // stack.push(main_addr);
     let dump = Stack::new();
     let stats = Stats::new();
     Ok(Machine {
@@ -242,7 +242,14 @@ impl Machine {
         self.stats.incr_steps();
     }
 
-    pub fn eval(&mut self) -> Result<(), String> {
+    pub fn eval(&mut self, entry_point: Option<&ast::Name>) -> Result<(), String> {
+        let fallback_entry_point = ast::Name::new("main");
+        let entry_point = entry_point.unwrap_or(&fallback_entry_point);
+        let entry_point_addr = *self
+            .globals
+            .lookup(entry_point)
+            .ok_or(format!("entry point '{:?}' not found", entry_point))?;
+        self.stack.push(entry_point_addr);
         while !self.is_done()? {
             self.eval_step()?;
             self.do_admin();

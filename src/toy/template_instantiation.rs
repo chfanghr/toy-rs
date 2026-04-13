@@ -123,11 +123,36 @@ impl IntegerNode {
     }
 }
 
+custom_derive! {
+    #[derive(Debug, Copy, Clone, IterVariants(PrimOpVariants))]
+    pub enum PrimOp {
+        Neg,
+    }
+}
+
+impl PrimOp {
+    fn to_name(&self) -> &'static str {
+        match self {
+            PrimOp::Neg => "neg",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PrimNode(pub PrimOp);
+
+impl PrimNode {
+    pub fn new(o: PrimOp) -> Self {
+        Self(o)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Node {
     Ap(ApplicationNode),
     SuperComb(SuperCombinatorNode),
     Num(IntegerNode),
+    Prim(PrimNode),
     Indirect(Addr),
     Dummy,
 }
@@ -173,7 +198,7 @@ pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
     let (heap, globals) = build_initial_heap(p.0);
     let main_addr = *globals
         .lookup(&ast::Name::new("main"))
-        .ok_or("main".to_string())?;
+        .ok_or("main function missing".to_string())?;
     let mut stack = Stack::new();
     stack.push(main_addr);
     let dump = Stack::new();
@@ -190,17 +215,22 @@ pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
 fn build_initial_heap(
     scs: Vec<ast::SuperCombinator<ast::Name>>,
 ) -> (Heap<Rc<RefCell<Node>>>, Assoc<ast::Name, Addr>) {
-    scs.into_iter().chain(ast::prelude()).fold(
-        (Heap::new(), Assoc::new()),
-        |(mut heap, mut globals), sc| {
-            let name = sc.name.clone();
-            let addr = heap.alloc(Node::new_in_rc_refcell(Node::SuperComb(
-                SuperCombinatorNode::new(sc),
-            )));
-            globals.insert(name, addr);
-            (heap, globals)
-        },
-    )
+    PrimOp::iter_variants()
+        .map(|op| (ast::Name::new(op.to_name()), Node::Prim(PrimNode::new(op))))
+        .chain(ast::prelude().into_iter().chain(scs).map(|sc| {
+            (
+                sc.name.clone(),
+                Node::SuperComb(SuperCombinatorNode::new(sc)),
+            )
+        }))
+        .fold(
+            (Heap::new(), Assoc::new()),
+            |(mut heap, mut globals), (name, node)| {
+                let addr = heap.alloc(Node::new_in_rc_refcell(node));
+                globals.insert(name, addr);
+                (heap, globals)
+            },
+        )
 }
 
 impl Machine {
@@ -214,7 +244,6 @@ impl Machine {
 
     pub fn eval(&mut self) -> Result<(), String> {
         while !self.is_done()? {
-            println!("{:#?}\n", self);
             self.eval_step()?;
             self.do_admin();
         }
@@ -232,6 +261,7 @@ impl Machine {
             Node::Num(ref num_node) => self.handle_num_node(num_node),
             Node::Ap(ref ap_node) => self.handle_ap_node(ap_node),
             Node::SuperComb(ref super_comb_node) => self.handle_super_comb_node(super_comb_node),
+            Node::Prim(ref prim_node) => self.handle_prim_node(prim_node),
             Node::Indirect(addr) => self.handle_indirect_node(addr),
             Node::Dummy => panic!("BUG: incomplete template instantiation results in dummy node"),
         }
@@ -250,6 +280,10 @@ impl Machine {
     fn handle_ap_node(&mut self, n: &ApplicationNode) -> Result<(), String> {
         self.stack.push(n.l);
         Ok(())
+    }
+
+    fn handle_prim_node(&mut self, _p: &PrimNode) -> Result<(), String> {
+        todo!("cannot handle prim node yet")
     }
 
     fn handle_super_comb_node(&mut self, n: &SuperCombinatorNode) -> Result<(), String> {

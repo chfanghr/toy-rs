@@ -2,6 +2,11 @@ pub mod lexer;
 pub mod parser;
 pub mod template_instantiation;
 
+#[macro_use]
+extern crate custom_derive;
+#[macro_use]
+extern crate enum_derive;
+
 pub fn parse_program(i: &str) -> Result<parser::ast::Program<parser::ast::Name>, String> {
     use nom::Parser;
 

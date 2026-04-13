@@ -19,8 +19,8 @@ fn main() -> Result<(), String> {
     let p = toy::parse_program(source_file_content)?;
     let mut machine = toy::template_instantiation::Machine::new(p)?;
     machine.eval()?;
-    println!("{:#?}", machine);
-    println!("{:#?}", machine.stats);
+    // println!("{:#?}", machine);
+    // println!("{:#?}", machine.stats);
     println!("{:#?}", machine.peak_node().borrow());
     Ok(())
 }

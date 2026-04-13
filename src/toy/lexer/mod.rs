@@ -2,7 +2,7 @@ pub mod tokens;
 
 use tokens::*;
 
-use either::Either;
+use itertools::Either;
 use nom::{
     branch::alt,
     bytes::tag,

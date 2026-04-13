@@ -1,10 +1,7 @@
 use std::{env::args, fs::read_to_string};
 
 const DEMO_PROGRAM: &'static str = "
-        id x = x;
-        compose f g x = f (g x);
-        twice f = compose f f;
-        main = twice twice id 3
+        main = neg 3
     ";
 
 fn main() -> Result<(), String> {

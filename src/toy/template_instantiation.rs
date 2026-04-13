@@ -1,8 +1,12 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, LinkedList},
+    mem,
+    ops::Deref,
     rc::Rc,
 };
+
+use itertools::{Either, Itertools};
 
 use crate::parser::ast;
 
@@ -36,6 +40,10 @@ impl<T> Stack<T> {
 
     pub fn pop_n_releaxed(&mut self, n: usize) -> Vec<T> {
         (0..n).into_iter().map_while(|_| self.pop()).collect()
+    }
+
+    pub fn peak_n_releaxed(&self, n: usize) -> Vec<&T> {
+        self.0.iter().take(n).collect()
     }
 }
 
@@ -131,9 +139,21 @@ custom_derive! {
 }
 
 impl PrimOp {
+    fn get_arity(&self) -> usize {
+        match self {
+            PrimOp::Neg => 1,
+        }
+    }
+
     fn to_name(&self) -> &'static str {
         match self {
             PrimOp::Neg => "neg",
+        }
+    }
+
+    fn run(&self, args: Vec<i64>) -> i64 {
+        match self {
+            PrimOp::Neg => -(args.first().unwrap()),
         }
     }
 }
@@ -196,11 +216,7 @@ pub struct Machine {
 
 pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
     let (heap, globals) = build_initial_heap(p.0);
-    // let main_addr = *globals
-    //     .lookup(&ast::Name::new("main"))
-    //     .ok_or("main function missing".to_string())?;
     let stack = Stack::new();
-    // stack.push(main_addr);
     let dump = Stack::new();
     let stats = Stats::new();
     Ok(Machine {
@@ -250,7 +266,14 @@ impl Machine {
             .lookup(entry_point)
             .ok_or(format!("entry point '{:?}' not found", entry_point))?;
         self.stack.push(entry_point_addr);
-        while !self.is_done()? {
+        loop {
+            if self.is_fully_reduce() {
+                if self.dump.is_empty() {
+                    break;
+                }
+                self.pop_stack_frame();
+            }
+
             self.eval_step()?;
             self.do_admin();
         }
@@ -260,40 +283,113 @@ impl Machine {
     fn eval_step(&mut self) -> Result<(), String> {
         let addr = *self.stack.peak().unwrap(); // Guarded by isDone
         let node = self.heap.access(addr).unwrap().clone();
-        self.dispatch(node)
+        self.dispatch(addr, node)
     }
 
-    fn dispatch(&mut self, node: Rc<RefCell<Node>>) -> Result<(), String> {
+    fn dispatch(&mut self, node_addr: Addr, node: Rc<RefCell<Node>>) -> Result<(), String> {
         match *node.borrow() {
-            Node::Num(ref num_node) => self.handle_num_node(num_node),
-            Node::Ap(ref ap_node) => self.handle_ap_node(ap_node),
-            Node::SuperComb(ref super_comb_node) => self.handle_super_comb_node(super_comb_node),
-            Node::Prim(ref prim_node) => self.handle_prim_node(prim_node),
-            Node::Indirect(addr) => self.handle_indirect_node(addr),
+            Node::Num(ref num_node) => self.handle_num_node(node_addr, num_node),
+            Node::Ap(ref ap_node) => self.handle_ap_node(node_addr, ap_node),
+            Node::SuperComb(ref super_comb_node) => {
+                self.handle_super_comb_node(node_addr, super_comb_node)
+            }
+            Node::Prim(ref prim_node) => self.handle_prim_node(node_addr, prim_node),
+            Node::Indirect(addr) => self.handle_indirect_node(node_addr, addr),
             Node::Dummy => panic!("BUG: incomplete template instantiation results in dummy node"),
         }
     }
 
-    fn handle_indirect_node(&mut self, addr: Addr) -> Result<(), String> {
+    fn handle_indirect_node(&mut self, _node_addr: Addr, addr: Addr) -> Result<(), String> {
         let _ = self.stack.pop();
         self.stack.push(addr);
         Ok(())
     }
 
-    fn handle_num_node(&mut self, _n: &IntegerNode) -> Result<(), String> {
+    fn handle_num_node(&mut self, _node_addr: Addr, _n: &IntegerNode) -> Result<(), String> {
         Err("cannot apply to an integer".to_string())
     }
 
-    fn handle_ap_node(&mut self, n: &ApplicationNode) -> Result<(), String> {
+    fn handle_ap_node(&mut self, node_addr: Addr, n: &ApplicationNode) -> Result<(), String> {
+        let r = self.follow_indirect(n.r);
+        if r != n.r {
+            self.replace_node_at(node_addr, Node::Ap(ApplicationNode { l: n.l, r: r }));
+        }
         self.stack.push(n.l);
         Ok(())
     }
 
-    fn handle_prim_node(&mut self, _p: &PrimNode) -> Result<(), String> {
-        todo!("cannot handle prim node yet")
+    fn follow_indirect(&self, a: Addr) -> Addr {
+        match self.heap.access(a).unwrap().borrow().deref() {
+            Node::Indirect(a) => self.follow_indirect(*a),
+            _ => a,
+        }
     }
 
-    fn handle_super_comb_node(&mut self, n: &SuperCombinatorNode) -> Result<(), String> {
+    fn handle_prim_node(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
+        let arity = prim.0.get_arity();
+        let num_addrs_to_pop = arity + 1;
+        let ap_node_addrs = self
+            .stack
+            .peak_n_releaxed(num_addrs_to_pop)
+            .into_iter()
+            .skip(1)
+            .copied()
+            .collect::<Vec<Addr>>();
+        if ap_node_addrs.len() != arity {
+            Err(format!(
+                "prim op {:?} expected {} arguments, got {}",
+                prim.0,
+                arity,
+                ap_node_addrs.len()
+            ))?
+        }
+        let node_addr_to_override = *ap_node_addrs.last().unwrap();
+        let (unevaluated, evaluated): (Vec<_>, Vec<_>) = ap_node_addrs
+            .into_iter()
+            .map(
+                |addr| match self.heap.access(addr).unwrap().borrow().deref() {
+                    Node::Ap(ap) => ap.r,
+                    node => panic!("BUG: expected Ap node, got {:?}", node),
+                },
+            )
+            .partition_map(|arg_addr| {
+                let node = self.heap.access(arg_addr).unwrap().borrow();
+                match node.deref() {
+                    Node::Num(n) => Either::Right(n.0),
+                    _ => Either::Left(arg_addr),
+                }
+            });
+        match unevaluated.into_iter().next() {
+            None => {
+                self.stack.pop_n_releaxed(num_addrs_to_pop);
+                let res = prim.0.run(evaluated);
+                self.replace_node_at(node_addr_to_override, Node::Num(IntegerNode::new(res)));
+                self.stack.push(node_addr_to_override);
+            }
+            Some(addr) => {
+                self.push_stack_frame();
+                self.stack.push(addr);
+            }
+        }
+        Ok(())
+    }
+
+    fn push_stack_frame(&mut self) {
+        let mut stack_to_save = Stack::new();
+        mem::swap(&mut stack_to_save, &mut self.stack);
+        self.dump.push(stack_to_save);
+    }
+
+    fn pop_stack_frame(&mut self) {
+        let stack = self.dump.pop().unwrap();
+        self.stack = stack;
+    }
+
+    fn handle_super_comb_node(
+        &mut self,
+        _node_addr: Addr,
+        n: &SuperCombinatorNode,
+    ) -> Result<(), String> {
         let super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
         let num_args = n.0.arguments.len();
         let ap_node_addrs = self.stack.pop_n_releaxed(num_args);
@@ -307,13 +403,11 @@ impl Machine {
             .iter()
             .zip(n.0.arguments.clone())
             .map(
-                |(addr, name)| match *self.heap.access(*addr).unwrap().borrow() {
-                    Node::Ap(ref ap_node) => Ok((name, ap_node.r)),
-                    _ => Err("expected ap node".to_string()),
+                |(addr, name)| match self.heap.access(*addr).unwrap().borrow().deref() {
+                    Node::Ap(ap_node) => (name, ap_node.r),
+                    node => panic!("BUG: expected Ap node, got {:?}", node),
                 },
             )
-            .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
-            .into_iter()
             .fold(Assoc::new(), |mut a, (name, addr)| {
                 a.insert(name, addr);
                 a
@@ -413,11 +507,12 @@ impl Machine {
         }
     }
 
-    fn is_done(&self) -> Result<bool, String> {
+    // Current root redex cannot be further reduce?
+    fn is_fully_reduce(&self) -> bool {
         match self.stack.len() {
-            0 => Err("stack is empty".to_string()),
-            1 => Ok(self.peak_node().borrow().is_data_node()), // FIXME: what if main evaluates to WHNF
-            _ => Ok(false),
+            0 => panic!("BUG: current stack is empty"),
+            1 => self.peak_node().borrow().is_data_node(),
+            _ => false,
         }
     }
 

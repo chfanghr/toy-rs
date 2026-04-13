@@ -11,8 +11,8 @@ version = "0.1.0"
 [dependencies]
 clap = { version = "4.3.14", features = ["derive"] }
 custom_derive = "0.1.7"
-either = "1.15.0"
 enum_derive = "0.1.7"
+itertools = "0.14.0"
 nom = "8.0.0"
 
 [lib]

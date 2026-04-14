@@ -9,6 +9,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chumsky = "0.12.0"
 clap = { version = "4.3.14", features = ["derive"] }
 custom_derive = "0.1.7"
 enum_derive = "0.1.7"

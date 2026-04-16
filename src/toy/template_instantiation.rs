@@ -135,6 +135,10 @@ custom_derive! {
     #[derive(Debug, Copy, Clone, IterVariants(PrimOpVariants))]
     pub enum PrimOp {
         Neg,
+        Add,
+        Sub,
+        Mul,
+        Div,
     }
 }
 
@@ -142,18 +146,38 @@ impl PrimOp {
     fn get_arity(&self) -> usize {
         match self {
             PrimOp::Neg => 1,
+            PrimOp::Add => 2,
+            PrimOp::Sub => 2,
+            PrimOp::Mul => 2,
+            PrimOp::Div => 2,
         }
     }
 
     fn to_name(&self) -> &'static str {
         match self {
             PrimOp::Neg => "_prim_neg",
+            PrimOp::Add => "_prim_add",
+            PrimOp::Sub => "_prim_sub",
+            PrimOp::Mul => "_prim_mul",
+            PrimOp::Div => "_prim_div",
         }
+    }
+
+    fn impl_op<const N: usize, F>(args: Vec<i64>, f: F) -> i64
+    where
+        F: Fn([i64; N]) -> i64,
+    {
+        let args = args.try_into().unwrap();
+        f(args)
     }
 
     fn run(&self, args: Vec<i64>) -> i64 {
         match self {
-            PrimOp::Neg => -(args.first().unwrap()),
+            PrimOp::Neg => Self::impl_op(args, |[x]| -x),
+            PrimOp::Add => Self::impl_op(args, |[l, r]| l + r),
+            PrimOp::Sub => Self::impl_op(args, |[l, r]| l - r),
+            PrimOp::Mul => Self::impl_op(args, |[l, r]| l * r),
+            PrimOp::Div => Self::impl_op(args, |[l, r]| l / r),
         }
     }
 }

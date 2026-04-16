@@ -13,7 +13,7 @@ fn main() -> Result<(), String> {
     let source_file_content = source_file_content
         .as_ref()
         .map_or(DEMO_PROGRAM, |c| c.as_str());
-    let p = toy::parse_program(source_file_content)?;
+    let p = toy::program_from_text(source_file_content)?;
     let mut machine = toy::template_instantiation::Machine::new(p)?;
     machine.eval(None)?;
     eprintln!("{:#?}", machine);

@@ -1,49 +1,274 @@
 pub mod ast;
 
-use crate::lexer::tokens::*;
-use ast::*;
-use nom::{
-    bytes::take,
-    combinator::{complete, value},
-    multi::{many0, many1, separated_list0, separated_list1},
-    sequence::{delimited, separated_pair, terminated},
-    IResult, Parser,
+use chumsky::{
+    error::Cheap,
+    extra,
+    pratt::{infix, left, none, right},
+    prelude::{any, choice, end, just, recursive, Recursive},
+    recursive::Direct,
+    IterParser, Parser,
 };
 
-// MARK: Program
+use crate::{lexer::tokens::*, parser::ast::*};
 
-pub fn program(i: Tokens) -> IResult<Tokens, Program<Name>> {
-    separated_list1(is_symbol(Symbol::Semicolon), complete(super_comb))
-        .map(Program)
-        .parse(i)
+pub fn parser<'src>() -> impl Parser<'src, &'src [Token], Program<Name>, extra::Err<Cheap>> + Clone
+{
+    program().then_ignore(end())
 }
 
-// MARK: Supercombinators
+// program -> sc_1 ; ... ; sc_n where n >= 1
+fn program<'src>() -> impl Parser<'src, &'src [Token], Program<Name>, extra::Err<Cheap>> + Clone {
+    super_comb()
+        .separated_by(just_symbol(Symbol::Semicolon))
+        .collect::<Vec<_>>()
+        .map(Program)
+}
 
-// sc -> var var1 .... varN = expr
-fn super_comb(i: Tokens) -> IResult<Tokens, SuperCombinator<Name>> {
-    separated_pair((var_token, many0(var_token)), is_symbol(Symbol::Bind), expr)
+// sc -> var var_1 .... var_n = expr where n >= 0
+fn super_comb<'src>(
+) -> impl Parser<'src, &'src [Token], SuperCombinator<Name>, extra::Err<Cheap>> + Clone {
+    var()
+        .then(var().repeated().collect::<Vec<_>>())
+        .then_ignore(just_symbol(Symbol::Bind))
+        .then(expr())
         .map(|((name, arguments), body)| SuperCombinator {
             name,
             arguments,
             body,
         })
-        .parse(i)
 }
 
-// MARK: Expr
+fn match_token<'src, T>(
+    f: impl Fn(Token) -> Option<T> + Clone,
+) -> impl Parser<'src, &'src [Token], T, extra::Err<Cheap>> + Clone {
+    any().try_map(move |token, span| f(token).ok_or(Cheap::new(span)))
+}
 
-// expr -> let defns in expr
-//       | letrec defns in expr
-//       | case expr of alts
-//       | \ var1. . . varn -> expr
-//       | expr1
-fn expr(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    (let_in.map(boxed(Expr::Let)))
-        .or(case_of.map(boxed(Expr::Case)))
-        .or(lambda.map(boxed(Expr::Lam)))
-        .or(expr1)
-        .parse(i)
+fn var_token<'src>() -> impl Parser<'src, &'src [Token], String, extra::Err<Cheap>> + Clone {
+    match_token(|t| match t {
+        Token::Var(n) => Some(n),
+        _ => None,
+    })
+}
+
+fn num_token<'src, O: From<u32>>() -> impl Parser<'src, &'src [Token], O, extra::Err<Cheap>> + Clone
+{
+    match_token(|t| match t {
+        Token::Num(n) => Some(O::from(n)),
+        _ => None,
+    })
+}
+
+fn just_keyword<'src>(
+    k: Keyword,
+) -> impl Parser<'src, &'src [Token], Token, extra::Err<Cheap>> + Clone {
+    just(Token::Keyword(k))
+}
+
+fn just_symbol<'src>(
+    s: Symbol,
+) -> impl Parser<'src, &'src [Token], Token, extra::Err<Cheap>> + Clone {
+    just(Token::Symbol(s))
+}
+
+fn just_arith_op<'src>(
+    a: ArithOp,
+) -> impl Parser<'src, &'src [Token], Token, extra::Err<Cheap>> + Clone {
+    just(Token::Symbol(Symbol::ArithOp(a)))
+}
+
+fn just_rel_op<'src>(
+    r: RelOp,
+) -> impl Parser<'src, &'src [Token], Token, extra::Err<Cheap>> + Clone {
+    just(Token::Symbol(Symbol::RelOp(r)))
+}
+
+fn just_bool_op<'src>(
+    b: BoolOp,
+) -> impl Parser<'src, &'src [Token], Token, extra::Err<Cheap>> + Clone {
+    just(Token::Symbol(Symbol::BoolOp(b)))
+}
+
+// Constructor: Pack{num, num}
+fn constr<'src>() -> impl Parser<'src, &'src [Token], Constructor, extra::Err<Cheap>> + Clone {
+    just_keyword(Keyword::Pack)
+        .ignore_then(
+            ((num_token().map(Tag))
+                .then_ignore(just_symbol(Symbol::Comma))
+                .then(num_token().map(Arity)))
+            .delimited_by(
+                just_symbol(Symbol::LCurlyBrace),
+                just_symbol(Symbol::RCurlyBrace),
+            ),
+        )
+        .map(|(tag, arity)| Constructor { tag, arity })
+}
+
+// var
+fn var<'src>() -> impl Parser<'src, &'src [Token], Name, extra::Err<Cheap>> + Clone {
+    var_token().map(Name::new)
+}
+
+// num
+fn num<'src>() -> impl Parser<'src, &'src [Token], Integer, extra::Err<Cheap>> + Clone {
+    num_token().map(Integer)
+}
+
+/*
+aexpr -> var
+       | num
+       | Pack{num, num}
+       | (expr)
+*/
+fn aexpr<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap>> + 'b + Clone {
+    choice((
+        var().map(Expr::Var),
+        num().map(Expr::Num),
+        constr().map(Expr::Constr),
+        expr.delimited_by(just_symbol(Symbol::LParen), just_symbol(Symbol::RParen)),
+    ))
+}
+
+fn expr<'src>() -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap>> + Clone {
+    recursive(|this| {
+        let aexpr_chain = aexpr(this.clone())
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(ap_chain);
+        let def_infix_op = |assoc, p, f: &'static str| {
+            infix(assoc, p, |l, _, r, _| {
+                ap_chain(vec![Expr::Var(Name::new(f.to_string())), l, r])
+            })
+        };
+        let ops = aexpr_chain.clone().pratt((
+            def_infix_op(
+                right(2),
+                just_bool_op(BoolOp::Or).boxed(),
+                "_prim_boolean_or",
+            ),
+            def_infix_op(
+                right(3),
+                just_bool_op(BoolOp::And).boxed(),
+                "_prim_boolean_and",
+            ),
+            def_infix_op(none(4), just_rel_op(RelOp::GreaterThan).boxed(), "_prim_gt"),
+            def_infix_op(
+                none(4),
+                just_rel_op(RelOp::GreaterOrEqualTo).boxed(),
+                "_prim_ge",
+            ),
+            def_infix_op(none(4), just_rel_op(RelOp::LessThan).boxed(), "lt"),
+            def_infix_op(
+                none(4),
+                just_rel_op(RelOp::LessOrEqualTo).boxed(),
+                "_prim_le",
+            ),
+            def_infix_op(none(4), just_rel_op(RelOp::EqualTo).boxed(), "_prim_eq"),
+            def_infix_op(none(4), just_rel_op(RelOp::NotEqualTo).boxed(), "_prim_ne"),
+            def_infix_op(left(6), just_arith_op(ArithOp::Plus).boxed(), "_prim_add"),
+            def_infix_op(
+                left(6),
+                just_arith_op(ArithOp::Subtract).boxed(),
+                "_prim_sub",
+            ),
+            def_infix_op(
+                left(7),
+                just_arith_op(ArithOp::Multiply).boxed(),
+                "_prim_mul",
+            ),
+            def_infix_op(left(7), just_arith_op(ArithOp::Divide).boxed(), "_prim_div"),
+        ));
+
+        choice((
+            let_in(this.clone()).map(apply_boxed(Expr::Let)).boxed(),
+            case_of(this.clone()).map(apply_boxed(Expr::Case)).boxed(),
+            lambda(this.clone()).map(apply_boxed(Expr::Lam)).boxed(),
+            ops,
+            aexpr_chain,
+        ))
+    })
+}
+
+// let defns in expr
+// letrec defns in expr
+// defns -> defn_1 ; ... ; defn_n where n >= 1
+fn let_in<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], Let<Name>, extra::Err<Cheap>> + 'b + Clone {
+    let is_rec = (just_keyword(Keyword::Let).to(false)).or(just_keyword(Keyword::Letrec).to(true));
+    let defns = bind(expr.clone())
+        .separated_by(just_symbol(Symbol::Semicolon))
+        .at_least(1)
+        .collect::<Vec<_>>();
+    is_rec
+        .then(defns)
+        .then_ignore(just_keyword(Keyword::In))
+        .then(expr)
+        .map(|((is_recursive, definitions), body)| Let {
+            is_recursive,
+            definitions,
+            body,
+        })
+}
+
+// defn -> var = expr
+fn bind<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], Bind<Name>, extra::Err<Cheap>> + 'b + Clone {
+    var()
+        .then_ignore(just_symbol(Symbol::Bind))
+        .then(expr)
+        .map(|(binder, body)| Bind { binder, body })
+}
+
+// case expr of branches
+// branch -> branch_1 ; ... ; branch_n where n >= 1
+fn case_of<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], Case<Name>, extra::Err<Cheap>> + 'b + Clone {
+    just_keyword(Keyword::Case)
+        .ignore_then(expr.clone())
+        .then_ignore(just_keyword(Keyword::Of))
+        .then(
+            branch(expr)
+                .separated_by(just_symbol(Symbol::Semicolon))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map(|(scru, branches)| Case { scru, branches })
+}
+
+// branch -> <num> var_1, ... , var_n -> expr where n >= 0
+fn branch<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], Branch<Name>, extra::Err<Cheap>> + 'b + Clone {
+    let tag = num_token()
+        .delimited_by(just_symbol(Symbol::LBracket), just_symbol(Symbol::RBracket))
+        .map(Tag);
+    let bounded_fields = var().repeated().collect::<Vec<_>>();
+
+    tag.then(bounded_fields)
+        .then_ignore(just_symbol(Symbol::Arrow))
+        .then(expr)
+        .map(|((tag, bound_fields), body)| Branch {
+            tag,
+            bound_fields,
+            body,
+        })
+}
+
+// \var_1 ... var_n -> expr where n >= 1
+fn lambda<'src: 'b, 'b>(
+    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
+) -> impl Parser<'src, &'src [Token], LamdaAbstraction<Name>, extra::Err<Cheap>> + 'b + Clone {
+    just_symbol(Symbol::Backslash)
+        .ignore_then(var().repeated().at_least(1).collect::<Vec<_>>())
+        .then_ignore(just_symbol(Symbol::Arrow))
+        .then(expr)
+        .map(|(arguments, body)| LamdaAbstraction { arguments, body })
 }
 
 fn ap_chain(exprs: Vec<Expr<Name>>) -> Expr<Name> {
@@ -65,272 +290,46 @@ fn ap_chain(exprs: Vec<Expr<Name>>) -> Expr<Name> {
     }
 }
 
-// expr1 -> expr2 || expr1
-//        | expr2
-fn expr1(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    complete(
-        separated_pair(expr2, is_symbol(Symbol::BoolOp(BoolOp::Or)), expr1)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("||")), l, r])),
-    )
-    .or(expr2)
-    .parse(i)
-}
-
-// expr2 -> expr3 && expr2
-//        | expr3
-fn expr2(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    complete(
-        separated_pair(expr3, is_symbol(Symbol::BoolOp(BoolOp::And)), expr2)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("&&")), l, r])),
-    )
-    .or(expr3)
-    .parse(i)
-}
-
-// expr3 -> expr4 relop expr4
-//  | expr4
-fn expr3(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    (expr4, rel_op_var, expr4)
-        .map(|(l, op, r)| ap_chain(vec![op, l, r]))
-        .or(expr4)
-        .parse(i)
-}
-
-fn rel_op_var(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    match_token(|t| {
-        let op = match t {
-            Token::Symbol(Symbol::RelOp(op)) => Ok(op),
-            _ => Err(format!("expected rel op token, got {:?}", t)),
-        }?;
-
-        Ok(Expr::Var(Name::new(match op {
-            RelOp::LessOrEqualTo => "<=",
-            RelOp::LessThan => "<",
-            RelOp::EqualTo => "==",
-            RelOp::NotEqualTo => "/=",
-            RelOp::GreaterOrEqualTo => ">=",
-            RelOp::GreaterThan => ">",
-        })))
-    })
-    .parse(i)
-}
-
-// expr4 -> expr5 + expr4
-//        | expr5 - expr5
-//        | expr5
-fn expr4(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    complete(
-        separated_pair(expr5, is_symbol(Symbol::ArithOp(ArithOp::Plus)), expr4)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("+")), l, r])),
-    )
-    .or(complete(
-        separated_pair(expr5, is_symbol(Symbol::ArithOp(ArithOp::Minus)), expr5)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("-")), l, r])),
-    ))
-    .or(expr5)
-    .parse(i)
-}
-
-// expr5 -> expr6 * expr5
-//        | expr6 / expr6
-//        | expr6
-fn expr5(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    complete(
-        separated_pair(expr6, is_symbol(Symbol::ArithOp(ArithOp::Multiply)), expr5)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("*")), l, r])),
-    )
-    .or(complete(
-        separated_pair(expr6, is_symbol(Symbol::ArithOp(ArithOp::Divide)), expr6)
-            .map(|(l, r)| ap_chain(vec![Expr::Var(Name::new("/")), l, r])),
-    ))
-    .or(expr6)
-    .parse(i)
-}
-
-// expr6 -> aexpr1. . . aexprn (n >= 1)
-fn expr6(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    many1(complete(atomic_expr)).map(ap_chain).parse(i)
-}
-
-// let defns in expr
-// letrec defns in expr
-fn let_in(i: Tokens) -> nom::IResult<Tokens, Let<Name>> {
-    (value(false, is_keyword(Keyword::Let)).or(value(true, is_keyword(Keyword::Letrec))))
-        .and(terminated(
-            separated_list0(is_symbol(Symbol::Semicolon), bind),
-            is_keyword(Keyword::In),
-        ))
-        .and(expr)
-        .map(|((is_recursive, definitions), body)| Let {
-            is_recursive,
-            definitions,
-            body,
-        })
-        .parse(i)
-}
-
-// defn: var = expr
-fn bind(i: Tokens) -> nom::IResult<Tokens, Bind<Name>> {
-    separated_pair(var_token, is_symbol(Symbol::Bind), expr)
-        .map(|(binder, body)| Bind { binder, body })
-        .parse(i)
-}
-
-// case expr of branches
-fn case_of(i: Tokens) -> nom::IResult<Tokens, Case<Name>> {
-    delimited(is_keyword(Keyword::Case), expr, is_keyword(Keyword::Of))
-        .and(separated_list1(is_symbol(Symbol::Semicolon), branch))
-        .map(|(scru, branches)| Case { scru, branches })
-        .parse(i)
-}
-
-// [num] var1 ... varN -> expr
-fn branch(i: Tokens) -> nom::IResult<Tokens, Branch<Name>> {
-    terminated(
-        delimited(
-            is_symbol(Symbol::LBracket),
-            num_token::<u64>.map(Tag),
-            is_symbol(Symbol::RBracket),
-        )
-        .and(many0(var_token)),
-        is_symbol(Symbol::Arrow),
-    )
-    .and(expr)
-    .map(|((tag, bound_fields), body)| Branch {
-        tag,
-        bound_fields,
-        body,
-    })
-    .parse(i)
-}
-
-// \var1 ... varN -> expr
-fn lambda(i: Tokens) -> nom::IResult<Tokens, LamdaAbstraction<Name>> {
-    (delimited(
-        is_symbol(Symbol::Backslash),
-        many0(var_token),
-        is_symbol(Symbol::Arrow),
-    )
-    .and(expr))
-    .map(|(arguments, body)| LamdaAbstraction { arguments, body })
-    .parse(i)
-}
-
-// MARK: Atomic Expr
-
-/*
-aexpr -> var
-       | num
-       | Pack{num, num}
-       | (expr)
-*/
-
-fn atomic_expr(i: Tokens) -> nom::IResult<Tokens, Expr<Name>> {
-    (var.map(Expr::Var))
-        .or(num.map(Expr::Num))
-        .or(constr.map(Expr::Constr))
-        .or(delimited(
-            is_symbol(Symbol::LParen),
-            expr,
-            is_symbol(Symbol::RParen),
-        ))
-        .parse(i)
-}
-
-// Variable
-fn var(i: Tokens) -> nom::IResult<Tokens, Name> {
-    var_token.parse(i)
-}
-
-// Number
-fn num(i: Tokens) -> nom::IResult<Tokens, Integer> {
-    num_token.map(Integer).parse(i)
-}
-
-// Constructor: Pack{num, num}
-fn constr(i: Tokens) -> nom::IResult<Tokens, Constructor> {
-    delimited(
-        is_keyword(Keyword::Pack).and(is_symbol(Symbol::LCurlyBrace)),
-        separated_pair(num_token::<u64>, is_symbol(Symbol::Comma), num_token::<u64>),
-        is_token(Token::Symbol(Symbol::RCurlyBrace)),
-    )
-    .map(|(tag, arity)| Constructor {
-        tag: Tag(tag),
-        arity: Arity(arity),
-    })
-    .parse(i)
-}
-
-// MARK: Utils
-
-fn is_symbol<'a>(s: Symbol) -> impl Fn(Tokens<'a>) -> nom::IResult<Tokens, ()> {
-    is_token(Token::Symbol(s))
-}
-
-fn is_keyword<'a>(kw: Keyword) -> impl Fn(Tokens<'a>) -> nom::IResult<Tokens, ()> {
-    is_token(Token::Keyword(kw))
-}
-
-fn is_token<'a>(tt: Token) -> impl Fn(Tokens<'a>) -> nom::IResult<Tokens, ()> {
-    match_token(move |t| {
-        if t == &tt {
-            Ok(())
-        } else {
-            Err(format!("expected token {:?}, got {:?}", tt, t))
-        }
-    })
-}
-
-fn num_token<'a, O: From<u32>>(i: Tokens<'a>) -> nom::IResult<Tokens<'a>, O> {
-    match_token(|t| match t {
-        Token::Num(x) => Ok(O::from(*x)),
-        _ => Err(format!("expected a number, got {:?}", t)),
-    })
-    .parse(i)
-}
-
-fn var_token<'a>(i: Tokens<'a>) -> nom::IResult<Tokens<'a>, Name> {
-    match_token(|t| match t {
-        Token::Var(s) => Ok(Name::new(s)),
-        _ => Err(format!("expected a var, got {:?}", t)),
-    })
-    .parse(i)
-}
-
-fn one_token<'a>(i: Tokens<'a>) -> nom::IResult<Tokens<'a>, &'a Token> {
-    take(1usize)
-        .map(|s: Tokens| s.tokens().get(0).unwrap())
-        .parse(i)
-}
-
-fn match_token<'a, R>(
-    f: impl Fn(&'a Token) -> Result<R, String>,
-) -> impl Fn(Tokens<'a>) -> nom::IResult<Tokens, R> {
-    move |i| complete(one_token.map_res(&f)).parse(i)
-}
-
-fn boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
+fn apply_boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
     move |x| f(Box::new(x))
 }
 
-// MARK: Test
-
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::lexer;
 
+    use super::*;
+
     #[test]
-    fn test() {
-        let _ = (|| -> Result<_, String> {
-            let inp = "main = i (i 42)";
-            let (_rest, tokens) = lexer::token_vec.parse(inp).map_err(|err| err.to_string())?;
-            println!("{:#?}", tokens);
-            let tokens = Tokens::new(&tokens);
-            let res = program.parse(tokens).map_err(|err| err.to_string())?;
-            println!("{:#?}", res);
-            Ok(())
-        })()
-        .unwrap();
+    fn test_constr() {
+        let input: Vec<Token> = vec![
+            Token::Keyword(Keyword::Pack),
+            Token::Symbol(Symbol::LCurlyBrace),
+            Token::Num(0),
+            Token::Symbol(Symbol::Comma),
+            Token::Num(0),
+            Token::Symbol(Symbol::RCurlyBrace),
+        ];
+        assert_eq!(
+            constr().parse(&input).into_result(),
+            Ok(Constructor {
+                tag: Tag(0),
+                arity: Arity(0),
+            }),
+        );
+    }
+
+    #[test]
+    fn test_parser() {
+        let res = lexer::token_vec()
+            .parse(
+                "main = i (i (i 4)); 
+                 i x = x; 
+                 neg = _prim_neg
+                ",
+            )
+            .into_result()
+            .and_then(|tokens| parser().parse(&tokens).into_result());
+        println!("{:?}", res);
     }
 }

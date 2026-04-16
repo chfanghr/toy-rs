@@ -238,18 +238,18 @@ pub struct Machine {
     pub stats: Stats,
 }
 
-pub fn compile(p: ast::Program<ast::Name>) -> Result<Machine, String> {
+pub fn compile(p: ast::Program<ast::Name>) -> Machine {
     let (heap, globals) = build_initial_heap(p.0);
     let stack = Stack::new();
     let dump = Stack::new();
     let stats = Stats::new();
-    Ok(Machine {
+    Machine {
         stack,
         dump,
         heap,
         globals,
         stats,
-    })
+    }
 }
 
 fn build_initial_heap(
@@ -274,7 +274,7 @@ fn build_initial_heap(
 }
 
 impl Machine {
-    pub fn new(p: ast::Program<ast::Name>) -> Result<Machine, String> {
+    pub fn new(p: ast::Program<ast::Name>) -> Machine {
         compile(p)
     }
 

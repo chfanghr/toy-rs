@@ -14,7 +14,7 @@ fn main() -> Result<(), String> {
         .as_ref()
         .map_or(DEMO_PROGRAM, |c| c.as_str());
     let p = toy::program_from_text(source_file_content)?;
-    let mut machine = toy::template_instantiation::Machine::new(p)?;
+    let mut machine = toy::template_instantiation::Machine::new(p);
     machine.eval(None)?;
     eprintln!("{:#?}", machine);
     println!("{:#?}", machine.peak_node().borrow());

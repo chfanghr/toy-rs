@@ -180,7 +180,7 @@ fn expr<'src>() -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap
                 just_rel_op(RelOp::GreaterOrEqualTo).boxed(),
                 "_prim_ge",
             ),
-            def_infix_op(none(4), just_rel_op(RelOp::LessThan).boxed(), "lt"),
+            def_infix_op(none(4), just_rel_op(RelOp::LessThan).boxed(), "_prim_lt"),
             def_infix_op(
                 none(4),
                 just_rel_op(RelOp::LessOrEqualTo).boxed(),

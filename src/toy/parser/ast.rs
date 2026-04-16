@@ -80,38 +80,3 @@ pub struct SuperCombinator<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program<T>(pub Vec<SuperCombinator<T>>);
-
-pub fn prelude() -> Vec<SuperCombinator<Name>> {
-    vec![
-        SuperCombinator {
-            name: Name::new("i"), // id
-            arguments: vec![Name::new("x")],
-            body: Expr::Var(Name::new("x")),
-        },
-        SuperCombinator {
-            name: Name::new("k"), // const
-            arguments: vec![Name::new("x"), Name::new("y")],
-            body: Expr::Var(Name::new("x")),
-        },
-        SuperCombinator {
-            // <*>
-            name: Name::new("s"),
-            arguments: vec![
-                Name::new("f"),
-                Name::new("g"),
-                Name::new("x"),
-                Name::new("y"),
-            ],
-            body: Expr::Ap(Box::new(Application {
-                l: Expr::Ap(Box::new(Application {
-                    l: Expr::Var(Name::new("f")),
-                    r: Expr::Var(Name::new("x")),
-                })),
-                r: Expr::Ap(Box::new(Application {
-                    l: Expr::Var(Name::new("g")),
-                    r: Expr::Var(Name::new("y")),
-                })),
-            })),
-        },
-    ]
-}

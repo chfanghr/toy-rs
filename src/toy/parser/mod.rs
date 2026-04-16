@@ -9,7 +9,27 @@ use chumsky::{
     IterParser, Parser,
 };
 
-use crate::{lexer::tokens::*, parser::ast::*};
+use crate::{
+    lexer::{self, tokens::*},
+    parser::ast::*,
+};
+
+fn must_lex_and_parse_sc(inp: &str) -> SuperCombinator<Name> {
+    lexer::token_vec()
+        .parse(inp)
+        .into_result()
+        .and_then(|toks| super_comb().parse(&toks).into_result())
+        .unwrap()
+}
+
+pub fn prelude() -> Vec<SuperCombinator<Name>> {
+    vec![
+        must_lex_and_parse_sc("i x = x"),
+        must_lex_and_parse_sc("k x y = x"),
+        must_lex_and_parse_sc("s f g x y = f x (g y)"),
+        must_lex_and_parse_sc("neg = _prim_neg"),
+    ]
+}
 
 pub fn parser<'src>() -> impl Parser<'src, &'src [Token], Program<Name>, extra::Err<Cheap>> + Clone
 {

@@ -8,7 +8,7 @@ use std::{
 
 use itertools::{Either, Itertools};
 
-use crate::parser::ast;
+use crate::parser::{ast, prelude};
 
 #[derive(Debug, Clone)]
 pub struct Stack<T>(pub LinkedList<T>);
@@ -147,7 +147,7 @@ impl PrimOp {
 
     fn to_name(&self) -> &'static str {
         match self {
-            PrimOp::Neg => "neg",
+            PrimOp::Neg => "_prim_neg",
         }
     }
 
@@ -233,7 +233,7 @@ fn build_initial_heap(
 ) -> (Heap<Rc<RefCell<Node>>>, Assoc<ast::Name, Addr>) {
     PrimOp::iter_variants()
         .map(|op| (ast::Name::new(op.to_name()), Node::Prim(PrimNode::new(op))))
-        .chain(ast::prelude().into_iter().chain(scs).map(|sc| {
+        .chain(prelude().into_iter().chain(scs).map(|sc| {
             (
                 sc.name.clone(),
                 Node::SuperComb(SuperCombinatorNode::new(sc)),
@@ -393,6 +393,14 @@ impl Machine {
         let super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
         let num_args = n.0.arguments.len();
         let ap_node_addrs = self.stack.pop_n_releaxed(num_args);
+        if num_args != ap_node_addrs.len() {
+            Err(format!(
+                "super combinator {:?} expected {:} args, got {:}",
+                n,
+                num_args,
+                ap_node_addrs.len()
+            ))?
+        }
         let node_addr_to_update = if num_args == 0 {
             super_comb_node_addr
         } else {

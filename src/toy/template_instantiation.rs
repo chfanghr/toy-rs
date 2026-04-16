@@ -238,20 +238,6 @@ pub struct Machine {
     pub stats: Stats,
 }
 
-pub fn compile(p: ast::Program<ast::Name>) -> Machine {
-    let (heap, globals) = build_initial_heap(p.0);
-    let stack = Stack::new();
-    let dump = Stack::new();
-    let stats = Stats::new();
-    Machine {
-        stack,
-        dump,
-        heap,
-        globals,
-        stats,
-    }
-}
-
 fn build_initial_heap(
     scs: Vec<ast::SuperCombinator<ast::Name>>,
 ) -> (Heap<Rc<RefCell<Node>>>, Assoc<ast::Name, Addr>) {
@@ -275,7 +261,17 @@ fn build_initial_heap(
 
 impl Machine {
     pub fn new(p: ast::Program<ast::Name>) -> Machine {
-        compile(p)
+        let (heap, globals) = build_initial_heap(p.0);
+        let stack = Stack::new();
+        let dump = Stack::new();
+        let stats = Stats::new();
+        Machine {
+            stack,
+            dump,
+            heap,
+            globals,
+            stats,
+        }
     }
 
     fn do_admin(&mut self) {

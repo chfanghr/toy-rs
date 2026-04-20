@@ -1,7 +1,7 @@
 use std::{env::args, fs::read_to_string};
 
 const DEMO_PROGRAM: &'static str = "
-        main = if (i true) (neg (if (i false) 42 69)) 1
+        main = xor true false
     ";
 
 fn main() -> Result<(), String> {

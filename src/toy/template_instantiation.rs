@@ -293,21 +293,22 @@ pub struct Machine {
     pub stats: Stats,
 }
 
-pub const FALSE_SC_NAME: &str = "false";
 pub const FALSE_TAG: u64 = 0;
-
-pub const TRUE_SC_NAME: &str = "true";
 pub const TRUE_TAG: u64 = 1;
 
 fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
         must_lex_and_parse_sc(&format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
-        must_lex_and_parse_sc(&format!("{} = Pack{{{},0}}", FALSE_SC_NAME, FALSE_TAG)),
-        must_lex_and_parse_sc(&format!("{} = Pack{{{},0}}", TRUE_SC_NAME, TRUE_TAG)),
+        must_lex_and_parse_sc(&format!("false = Pack{{{},0}}", FALSE_TAG)),
+        must_lex_and_parse_sc(&format!("true = Pack{{{},0}}", TRUE_TAG)),
         must_lex_and_parse_sc(&format!(
             "if = {}",
             PrimOpKind::IfThenElse.to_name().unwrap()
         )),
+        must_lex_and_parse_sc("and x y = if x y false"),
+        must_lex_and_parse_sc("or x y = if x true y"),
+        must_lex_and_parse_sc("not x = if x false true"),
+        must_lex_and_parse_sc("xor x y = if x (not y) y"),
     ]
 }
 

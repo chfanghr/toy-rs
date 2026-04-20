@@ -140,6 +140,7 @@ custom_derive! {
         Sub,
         Mul,
         Div,
+        IfThenElse,
         Constr
     }
 }
@@ -152,18 +153,19 @@ impl PrimOpKind {
             PrimOpKind::Sub => Some("_prim_sub"),
             PrimOpKind::Mul => Some("_prim_mul"),
             PrimOpKind::Div => Some("_prim_div"),
+            PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
             PrimOpKind::Constr => None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ConstrPrimOP {
+pub struct ConstrPrimOp {
     pub tag: u64,
     pub arity: usize,
 }
 
-impl ConstrPrimOP {
+impl ConstrPrimOp {
     pub fn new(tag: u64, arity: usize) -> Self {
         Self { tag, arity }
     }
@@ -176,7 +178,8 @@ pub enum PrimOp {
     Sub,
     Mul,
     Div,
-    Constr(ConstrPrimOP),
+    IfThenElse,
+    Constr(ConstrPrimOp),
 }
 
 impl PrimOp {
@@ -187,6 +190,7 @@ impl PrimOp {
             PrimOpKind::Sub => Some(PrimOp::Sub),
             PrimOpKind::Mul => Some(PrimOp::Mul),
             PrimOpKind::Div => Some(PrimOp::Div),
+            PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
             PrimOpKind::Constr => None,
         }
     }
@@ -197,6 +201,7 @@ impl PrimOp {
             PrimOp::Sub => PrimOpKind::Sub,
             PrimOp::Mul => PrimOpKind::Mul,
             PrimOp::Div => PrimOpKind::Div,
+            PrimOp::IfThenElse => PrimOpKind::IfThenElse,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -208,6 +213,7 @@ impl PrimOp {
             PrimOp::Sub => 2,
             PrimOp::Mul => 2,
             PrimOp::Div => 2,
+            PrimOp::IfThenElse => 3,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -287,11 +293,22 @@ pub struct Machine {
     pub stats: Stats,
 }
 
+pub const FALSE_SC_NAME: &str = "false";
+pub const FALSE_TAG: u64 = 0;
+
+pub const TRUE_SC_NAME: &str = "true";
+pub const TRUE_TAG: u64 = 1;
+
 fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
-    vec![must_lex_and_parse_sc(&format!(
-        "neg = {}",
-        PrimOpKind::Neg.to_name().unwrap()
-    ))]
+    vec![
+        must_lex_and_parse_sc(&format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
+        must_lex_and_parse_sc(&format!("{} = Pack{{{},0}}", FALSE_SC_NAME, FALSE_TAG)),
+        must_lex_and_parse_sc(&format!("{} = Pack{{{},0}}", TRUE_SC_NAME, TRUE_TAG)),
+        must_lex_and_parse_sc(&format!(
+            "if = {}",
+            PrimOpKind::IfThenElse.to_name().unwrap()
+        )),
+    ]
 }
 
 fn build_initial_heap(
@@ -420,6 +437,7 @@ impl Machine {
     fn handle_prim_node(&mut self, node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
         match &prim.0 {
             PrimOp::Constr(c) => self.handle_prim_node_constr(node_addr, c),
+            PrimOp::IfThenElse => self.handle_prim_node_if_then_else(node_addr),
             _ => self.handle_prim_node_nf(node_addr, prim),
         }
     }
@@ -427,7 +445,7 @@ impl Machine {
     fn handle_prim_node_constr(
         &mut self,
         node_addr: Addr,
-        constr_prim_op: &ConstrPrimOP,
+        constr_prim_op: &ConstrPrimOp,
     ) -> Result<(), String> {
         assert_eq!(self.stack.pop(), Some(node_addr));
         let arity = constr_prim_op.arity;
@@ -462,6 +480,62 @@ impl Machine {
         Ok(())
     }
 
+    fn handle_prim_node_if_then_else(&mut self, node_addr: Addr) -> Result<(), String> {
+        assert_eq!(self.stack.pop(), Some(node_addr));
+        // stack layout deref:
+        // PrimNode IfThenElse
+        // Ap _l cond
+        // Ap _l then_branch
+        // Ap _l else_branch
+
+        let pred_ap_addr = self.stack.pop().ok_or("cond expr missing".to_string())?;
+        let pred_addr = self.must_get_application_node_r_at(pred_ap_addr);
+
+        let then_branch_ap_addr = self.stack.pop().ok_or("then branch missing".to_string())?;
+        let then_branch_addr = self.must_get_application_node_r_at(then_branch_ap_addr);
+        let else_branch_ap_addr = self.stack.pop().ok_or("else branch missing".to_string())?;
+        let else_branch_addr = self.must_get_application_node_r_at(else_branch_ap_addr);
+
+        let node_addr_to_override = else_branch_ap_addr;
+
+        let next = match self.heap.access(pred_addr).unwrap().borrow().deref() {
+            Node::Num(_) => {
+                // Otherwise it won't stop evaluating
+                Err("predicate expression evaluated to num".to_string())?
+            }
+            Node::Data(d) => {
+                let next_addr = match (d.tag, d.field_addrs.len()) {
+                    (TRUE_TAG, 0) => Ok(then_branch_addr),
+                    (FALSE_TAG, 0) => Ok(else_branch_addr),
+                    (tag, fields_len) => Err(format!(
+                        "predicate expression didn't evaluate to boolean, tag: {}, fields lens: {}",
+                        tag, fields_len
+                    )),
+                }?;
+                Either::Right(next_addr)
+            }
+            _ => Either::Left(pred_addr),
+        };
+
+        match next {
+            Either::Right(next_addr) => {
+                self.replace_node_at(node_addr_to_override, Node::Indirect(next_addr));
+                self.stack.push(node_addr_to_override);
+            }
+            Either::Left(pred_addr) => {
+                // Predicate expression needs to be evaluated to NF first
+                self.stack.push(else_branch_ap_addr);
+                self.stack.push(then_branch_ap_addr);
+                self.stack.push(pred_ap_addr);
+                self.stack.push(node_addr);
+                self.push_stack_frame();
+                self.stack.push(pred_addr);
+            }
+        }
+
+        Ok(())
+    }
+
     fn handle_prim_node_nf(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
         let arity = prim.0.get_arity();
         let num_addrs_to_pop = arity + 1;
@@ -483,12 +557,7 @@ impl Machine {
         let node_addr_to_override = *ap_node_addrs.last().unwrap();
         let (unevaluated, evaluated): (Vec<_>, Vec<_>) = ap_node_addrs
             .into_iter()
-            .map(
-                |addr| match self.heap.access(addr).unwrap().borrow().deref() {
-                    Node::Ap(ap) => self.follow_indirect(ap.r),
-                    node => panic!("BUG: expected Ap node, got {:?}", node),
-                },
-            )
+            .map(|addr| self.must_get_application_node_r_at(addr))
             .partition_map(|arg_addr| {
                 let node = self.heap.access(arg_addr).unwrap().borrow();
                 if node.is_data_node() {
@@ -554,7 +623,7 @@ impl Machine {
                     Ok(x / y)
                 }
             }),
-            _ => panic!("BUG: run_prim_op_nf doesn't handle constructor"),
+            _ => panic!("BUG: run_prim_op_nf doesn't handle constructor or if-then-else"),
         }
     }
 
@@ -594,12 +663,10 @@ impl Machine {
         let env_args = ap_node_addrs
             .iter()
             .zip(n.0.arguments.clone())
-            .map(
-                |(addr, name)| match self.heap.access(*addr).unwrap().borrow().deref() {
-                    Node::Ap(ap_node) => (name, ap_node.r),
-                    node => panic!("BUG: expected Ap node, got {:?}", node),
-                },
-            )
+            .map(|(addr, name)| {
+                let r_addr = self.must_get_application_node_r_at(*addr);
+                (name, r_addr)
+            })
             .fold(Assoc::new(), |mut a, (name, addr)| {
                 a.insert(name, addr);
                 a
@@ -611,6 +678,13 @@ impl Machine {
         self.stack.push(addr);
 
         Ok(())
+    }
+
+    fn must_get_application_node_r_at(&self, addr: Addr) -> Addr {
+        self.follow_indirect(match self.heap.access(addr).unwrap().borrow().deref() {
+            Node::Ap(ap_node) => ap_node.r,
+            node => panic!("BUG: expected Ap node, got {:?}", node),
+        })
     }
 
     fn alloc_node(&mut self, n: Node) -> Addr {
@@ -696,7 +770,7 @@ impl Machine {
             }
             ast::Expr::Constr(c) => Ok(self.replace_or_alloc_node_at(
                 replace_at,
-                Node::Prim(PrimNode::new(PrimOp::Constr(ConstrPrimOP::new(
+                Node::Prim(PrimNode::new(PrimOp::Constr(ConstrPrimOp::new(
                     c.tag.0,
                     c.arity.0 as usize,
                 )))),

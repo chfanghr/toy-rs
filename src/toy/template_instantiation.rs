@@ -132,17 +132,74 @@ impl IntegerNode {
 }
 
 custom_derive! {
-    #[derive(Debug, Copy, Clone, IterVariants(PrimOpVariants))]
-    pub enum PrimOp {
+    #[derive(Debug, Copy, Clone, IterVariants(PrimOpKindVariants))]
+    pub enum PrimOpKind {
         Neg,
         Add,
         Sub,
         Mul,
         Div,
+        Constr
     }
 }
 
+impl PrimOpKind {
+    fn to_name(&self) -> Option<&'static str> {
+        match self {
+            PrimOpKind::Neg => Some("_prim_neg"),
+            PrimOpKind::Add => Some("_prim_add"),
+            PrimOpKind::Sub => Some("_prim_sub"),
+            PrimOpKind::Mul => Some("_prim_mul"),
+            PrimOpKind::Div => Some("_prim_div"),
+            PrimOpKind::Constr => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstrPrimOP {
+    pub tag: u64,
+    pub arity: u64,
+}
+
+impl ConstrPrimOP {
+    pub fn new(tag: u64, arity: u64) -> Self {
+        Self { tag, arity }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PrimOp {
+    Neg,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Constr(ConstrPrimOP),
+}
+
 impl PrimOp {
+    fn new_from_kind(k: PrimOpKind) -> Option<Self> {
+        match k {
+            PrimOpKind::Neg => Some(PrimOp::Neg),
+            PrimOpKind::Add => Some(PrimOp::Add),
+            PrimOpKind::Sub => Some(PrimOp::Sub),
+            PrimOpKind::Mul => Some(PrimOp::Mul),
+            PrimOpKind::Div => Some(PrimOp::Div),
+            PrimOpKind::Constr => None,
+        }
+    }
+    fn get_kind(&self) -> PrimOpKind {
+        match self {
+            PrimOp::Neg => PrimOpKind::Neg,
+            PrimOp::Add => PrimOpKind::Add,
+            PrimOp::Sub => PrimOpKind::Sub,
+            PrimOp::Mul => PrimOpKind::Mul,
+            PrimOp::Div => PrimOpKind::Div,
+            PrimOp::Constr(_) => PrimOpKind::Constr,
+        }
+    }
+
     fn get_arity(&self) -> usize {
         match self {
             PrimOp::Neg => 1,
@@ -150,34 +207,7 @@ impl PrimOp {
             PrimOp::Sub => 2,
             PrimOp::Mul => 2,
             PrimOp::Div => 2,
-        }
-    }
-
-    fn to_name(&self) -> &'static str {
-        match self {
-            PrimOp::Neg => "_prim_neg",
-            PrimOp::Add => "_prim_add",
-            PrimOp::Sub => "_prim_sub",
-            PrimOp::Mul => "_prim_mul",
-            PrimOp::Div => "_prim_div",
-        }
-    }
-
-    fn impl_op<const N: usize, F>(args: Vec<i64>, f: F) -> i64
-    where
-        F: Fn([i64; N]) -> i64,
-    {
-        let args = args.try_into().unwrap();
-        f(args)
-    }
-
-    fn run(&self, args: Vec<i64>) -> i64 {
-        match self {
-            PrimOp::Neg => Self::impl_op(args, |[x]| -x),
-            PrimOp::Add => Self::impl_op(args, |[l, r]| l + r),
-            PrimOp::Sub => Self::impl_op(args, |[l, r]| l - r),
-            PrimOp::Mul => Self::impl_op(args, |[l, r]| l * r),
-            PrimOp::Div => Self::impl_op(args, |[l, r]| l / r),
+            PrimOp::Constr(c) => c.arity as usize,
         }
     }
 }
@@ -186,9 +216,19 @@ impl PrimOp {
 pub struct PrimNode(pub PrimOp);
 
 impl PrimNode {
+    pub fn new_from_kind(k: PrimOpKind) -> Option<Self> {
+        PrimOp::new_from_kind(k).map(Self)
+    }
+
     pub fn new(o: PrimOp) -> Self {
         Self(o)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DataNode {
+    pub tag: i64,
+    pub field_addrs: Vec<Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +237,7 @@ pub enum Node {
     SuperComb(SuperCombinatorNode),
     Num(IntegerNode),
     Prim(PrimNode),
+    Data(DataNode),
     Indirect(Addr),
     Dummy,
 }
@@ -209,6 +250,7 @@ impl Node {
     fn is_data_node(&self) -> bool {
         match self {
             Node::Num(_) => true,
+            Node::Data(_) => true,
             _ => false,
         }
     }
@@ -241,8 +283,13 @@ pub struct Machine {
 fn build_initial_heap(
     scs: Vec<ast::SuperCombinator<ast::Name>>,
 ) -> (Heap<Rc<RefCell<Node>>>, Assoc<ast::Name, Addr>) {
-    PrimOp::iter_variants()
-        .map(|op| (ast::Name::new(op.to_name()), Node::Prim(PrimNode::new(op))))
+    PrimOpKind::iter_variants()
+        .filter_map(|op| {
+            Some((
+                ast::Name::new(op.to_name()?),
+                Node::Prim(PrimNode::new_from_kind(op)?),
+            ))
+        })
         .chain(prelude().into_iter().chain(scs).map(|sc| {
             (
                 sc.name.clone(),
@@ -309,6 +356,7 @@ impl Machine {
     fn dispatch(&mut self, node_addr: Addr, node: Rc<RefCell<Node>>) -> Result<(), String> {
         match *node.borrow() {
             Node::Num(ref num_node) => self.handle_num_node(node_addr, num_node),
+            Node::Data(ref data_node) => self.handle_data_node(node_addr, data_node),
             Node::Ap(ref ap_node) => self.handle_ap_node(node_addr, ap_node),
             Node::SuperComb(ref super_comb_node) => {
                 self.handle_super_comb_node(node_addr, super_comb_node)
@@ -329,6 +377,10 @@ impl Machine {
         Err("cannot apply to an integer".to_string())
     }
 
+    fn handle_data_node(&mut self, _node_addr: Addr, _n: &DataNode) -> Result<(), String> {
+        Err("cannot apply to a data node".to_string())
+    }
+
     fn handle_ap_node(&mut self, node_addr: Addr, n: &ApplicationNode) -> Result<(), String> {
         let r = self.follow_indirect(n.r);
         if r != n.r {
@@ -345,7 +397,18 @@ impl Machine {
         }
     }
 
-    fn handle_prim_node(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
+    fn handle_prim_node(&mut self, node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
+        match &prim.0.get_kind() {
+            PrimOpKind::Constr => self.handle_prim_node_cosntr(node_addr, prim),
+            _ => self.handle_prim_node_nf(node_addr, prim),
+        }
+    }
+
+    fn handle_prim_node_cosntr(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
+        todo!()
+    }
+
+    fn handle_prim_node_nf(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
         let arity = prim.0.get_arity();
         let num_addrs_to_pop = arity + 1;
         let ap_node_addrs = self
@@ -374,16 +437,17 @@ impl Machine {
             )
             .partition_map(|arg_addr| {
                 let node = self.heap.access(arg_addr).unwrap().borrow();
-                match node.deref() {
-                    Node::Num(n) => Either::Right(n.0),
-                    _ => Either::Left(arg_addr),
+                if node.is_data_node() {
+                    Either::Right(arg_addr)
+                } else {
+                    Either::Left(arg_addr)
                 }
             });
         match unevaluated.into_iter().next() {
             None => {
                 self.stack.pop_n_releaxed(num_addrs_to_pop);
-                let res = prim.0.run(evaluated);
-                self.replace_node_at(node_addr_to_override, Node::Num(IntegerNode::new(res)));
+                let node = self.run_prim_op_nf(prim.0.get_kind(), evaluated)?;
+                self.replace_node_at(node_addr_to_override, node);
                 self.stack.push(node_addr_to_override);
             }
             Some(addr) => {
@@ -392,6 +456,51 @@ impl Machine {
             }
         }
         Ok(())
+    }
+
+    fn impl_prim_all_num_args<const N: usize, F>(
+        &mut self,
+        arg_addrs: Vec<Addr>,
+        f: F,
+    ) -> Result<Node, String>
+    where
+        F: Fn([i64; N]) -> Result<i64, String>,
+    {
+        let args_vec: Vec<i64> = arg_addrs
+            .into_iter()
+            .map(
+                |addr| match self.heap.access(addr).unwrap().borrow().deref() {
+                    Node::Num(n) => Ok(n.0),
+                    n => Err(format!("expected integer node at {:?}, got {:?}", addr, n)),
+                },
+            )
+            .try_collect()?;
+        let args_arr: [i64; N] = args_vec
+            .try_into()
+            .map_err(|v: Vec<i64>| format!("expected {} args, got {}", N, v.len()))?;
+        let res = f(args_arr).map_err(|e| format!("error while executing the prim op: {}", e))?;
+        Ok(Node::Num(IntegerNode(res)))
+    }
+
+    fn run_prim_op_nf(
+        &mut self,
+        prim_op: PrimOpKind,
+        arg_addrs: Vec<Addr>,
+    ) -> Result<Node, String> {
+        match prim_op {
+            PrimOpKind::Neg => self.impl_prim_all_num_args(arg_addrs, |[x]| Ok(-x)),
+            PrimOpKind::Add => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x + y)),
+            PrimOpKind::Sub => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x - y)),
+            PrimOpKind::Mul => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x * y)),
+            PrimOpKind::Div => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
+                if y == 0 {
+                    Err("divide by zero".to_string())
+                } else {
+                    Ok(x / y)
+                }
+            }),
+            _ => panic!("BUG: run_prim_op_nf doesn't handle constructor"),
+        }
     }
 
     fn push_stack_frame(&mut self) {
@@ -530,8 +639,14 @@ impl Machine {
 
                 self.instantiate(env, &l.body, replace_at)
             }
+            ast::Expr::Constr(c) => Ok(self.replace_or_alloc_node_at(
+                replace_at,
+                Node::Prim(PrimNode::new(PrimOp::Constr(ConstrPrimOP::new(
+                    c.tag.0, c.arity.0,
+                )))),
+            )),
             // FIXME
-            e => Err(format!("cannot instantiate this variant yet: {:?}", e)),
+            e => panic!("BUG: cannot instantiate this variant yet: {:?}", e),
         }
     }
 

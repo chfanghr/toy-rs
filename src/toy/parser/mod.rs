@@ -14,7 +14,7 @@ use crate::{
     parser::ast::*,
 };
 
-fn must_lex_and_parse_sc(inp: &str) -> SuperCombinator<Name> {
+pub fn must_lex_and_parse_sc(inp: &str) -> SuperCombinator<Name> {
     lexer::token_vec()
         .parse(inp)
         .into_result()
@@ -27,7 +27,6 @@ pub fn prelude() -> Vec<SuperCombinator<Name>> {
         must_lex_and_parse_sc("i x = x"),
         must_lex_and_parse_sc("k x y = x"),
         must_lex_and_parse_sc("s f g x y = f x (g y)"),
-        must_lex_and_parse_sc("neg = _prim_neg"),
     ]
 }
 

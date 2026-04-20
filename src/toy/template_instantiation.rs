@@ -9,7 +9,7 @@ use std::{
 
 use itertools::{Either, Itertools};
 
-use crate::parser::{ast, prelude};
+use crate::parser::{ast, must_lex_and_parse_sc, prelude};
 
 #[derive(Debug, Clone)]
 pub struct Stack<T>(pub LinkedList<T>);
@@ -287,6 +287,13 @@ pub struct Machine {
     pub stats: Stats,
 }
 
+fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
+    vec![must_lex_and_parse_sc(&format!(
+        "neg = {}",
+        PrimOpKind::Neg.to_name().unwrap()
+    ))]
+}
+
 fn build_initial_heap(
     scs: Vec<ast::SuperCombinator<ast::Name>>,
 ) -> (Heap<Rc<RefCell<Node>>>, Assoc<ast::Name, Addr>) {
@@ -297,12 +304,18 @@ fn build_initial_heap(
                 Node::Prim(PrimNode::new_from_kind(op)?),
             ))
         })
-        .chain(prelude().into_iter().chain(scs).map(|sc| {
-            (
-                sc.name.clone(),
-                Node::SuperComb(SuperCombinatorNode::new(sc)),
-            )
-        }))
+        .chain(
+            prelude()
+                .into_iter()
+                .chain(extended_prelude())
+                .chain(scs)
+                .map(|sc| {
+                    (
+                        sc.name.clone(),
+                        Node::SuperComb(SuperCombinatorNode::new(sc)),
+                    )
+                }),
+        )
         .fold(
             (Heap::new(), Assoc::new()),
             |(mut heap, mut globals), (name, node)| {

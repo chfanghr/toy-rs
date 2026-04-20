@@ -1,7 +1,7 @@
 use std::{env::args, fs::read_to_string};
 
 const DEMO_PROGRAM: &'static str = "
-        main = neg (i (i 3 + 6 / 2))
+        main = Pack{0, 0}
     ";
 
 fn main() -> Result<(), String> {

@@ -444,6 +444,8 @@ impl Machine {
 
         self.replace_node_at(node_to_override, data_node);
 
+        self.stack.push(node_to_override);
+
         Ok(())
     }
 

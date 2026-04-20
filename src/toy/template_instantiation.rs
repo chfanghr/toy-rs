@@ -509,7 +509,7 @@ impl Machine {
                     (TRUE_TAG, 0) => Ok(then_branch_addr),
                     (FALSE_TAG, 0) => Ok(else_branch_addr),
                     (tag, fields_len) => Err(format!(
-                        "predicate expression didn't evaluate to boolean, tag: {}, fields lens: {}",
+                        "predicate expression didn't evaluate to boolean, tag: {}, fields len: {}",
                         tag, fields_len
                     )),
                 }?;

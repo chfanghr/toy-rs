@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, LinkedList},
@@ -159,11 +160,11 @@ impl PrimOpKind {
 #[derive(Debug, Clone)]
 pub struct ConstrPrimOP {
     pub tag: u64,
-    pub arity: u64,
+    pub arity: usize,
 }
 
 impl ConstrPrimOP {
-    pub fn new(tag: u64, arity: u64) -> Self {
+    pub fn new(tag: u64, arity: usize) -> Self {
         Self { tag, arity }
     }
 }
@@ -227,8 +228,14 @@ impl PrimNode {
 
 #[derive(Debug, Clone)]
 pub struct DataNode {
-    pub tag: i64,
+    pub tag: u64,
     pub field_addrs: Vec<Addr>,
+}
+
+impl DataNode {
+    pub fn new(tag: u64, field_addrs: Vec<Addr>) -> Self {
+        Self { tag, field_addrs }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -398,14 +405,46 @@ impl Machine {
     }
 
     fn handle_prim_node(&mut self, node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
-        match &prim.0.get_kind() {
-            PrimOpKind::Constr => self.handle_prim_node_cosntr(node_addr, prim),
+        match &prim.0 {
+            PrimOp::Constr(c) => self.handle_prim_node_constr(node_addr, c),
             _ => self.handle_prim_node_nf(node_addr, prim),
         }
     }
 
-    fn handle_prim_node_cosntr(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
-        todo!()
+    fn handle_prim_node_constr(
+        &mut self,
+        node_addr: Addr,
+        constr_prim_op: &ConstrPrimOP,
+    ) -> Result<(), String> {
+        assert_eq!(self.stack.pop(), Some(node_addr));
+        let arity = constr_prim_op.arity;
+        let ap_node_addrs = self.stack.pop_n_releaxed(arity);
+        let num_popped = ap_node_addrs.len();
+
+        if num_popped != arity {
+            Err(format!(
+                "constructor expected {} args, got {}",
+                arity, num_popped
+            ))?
+        }
+
+        let node_to_override = ap_node_addrs.last().copied().unwrap_or(node_addr);
+
+        let arg_addrs = ap_node_addrs
+            .into_iter()
+            .map(
+                |addr| match self.heap.access(addr).unwrap().borrow().deref() {
+                    Node::Ap(a) => a.r,
+                    node => panic!("BUG: expected Ap node, got {:?}", node),
+                },
+            )
+            .collect::<Vec<Addr>>();
+
+        let data_node = Node::Data(DataNode::new(constr_prim_op.tag, arg_addrs));
+
+        self.replace_node_at(node_to_override, data_node);
+
+        Ok(())
     }
 
     fn handle_prim_node_nf(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
@@ -438,6 +477,7 @@ impl Machine {
             .partition_map(|arg_addr| {
                 let node = self.heap.access(arg_addr).unwrap().borrow();
                 if node.is_data_node() {
+                    // FIXME: dont think this is okay, there is no guarantee that a Data Node is fully reduced.
                     Either::Right(arg_addr)
                 } else {
                     Either::Left(arg_addr)
@@ -642,7 +682,8 @@ impl Machine {
             ast::Expr::Constr(c) => Ok(self.replace_or_alloc_node_at(
                 replace_at,
                 Node::Prim(PrimNode::new(PrimOp::Constr(ConstrPrimOP::new(
-                    c.tag.0, c.arity.0,
+                    c.tag.0,
+                    c.arity.0 as usize,
                 )))),
             )),
             // FIXME

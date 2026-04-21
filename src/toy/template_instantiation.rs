@@ -648,6 +648,22 @@ impl Machine {
         })
     }
 
+    fn impl_prim_all_num_args_ret_bool<const N: usize, F>(
+        &mut self,
+        arg_addrs: Vec<Addr>,
+        f: F,
+    ) -> Result<Node, String>
+    where
+        F: Fn([i64; N]) -> Result<bool, String>,
+    {
+        self.impl_prim_all_num_args(arg_addrs, |args| {
+            f(args).map(|b| {
+                let tag = if b { TRUE_TAG } else { FALSE_TAG };
+                Node::Data(DataNode::new(tag, vec![]))
+            })
+        })
+    }
+
     fn run_prim_op_nf(
         &mut self,
         prim_op: PrimOpKind,
@@ -665,18 +681,9 @@ impl Machine {
                     Ok(x / y)
                 }
             }),
-            PrimOpKind::Eq => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
-                let tag = if x == y { TRUE_TAG } else { FALSE_TAG };
-                Ok(Node::Data(DataNode::new(tag, vec![])))
-            }),
-            PrimOpKind::Lt => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
-                let tag = if x < y { TRUE_TAG } else { FALSE_TAG };
-                Ok(Node::Data(DataNode::new(tag, vec![])))
-            }),
-            PrimOpKind::Gt => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
-                let tag = if x > y { TRUE_TAG } else { FALSE_TAG };
-                Ok(Node::Data(DataNode::new(tag, vec![])))
-            }),
+            PrimOpKind::Eq => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x == y)),
+            PrimOpKind::Lt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x < y)),
+            PrimOpKind::Gt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x > y)),
             _ => panic!("BUG: run_prim_op_nf doesn't handle constructor or if-then-else"),
         }
     }

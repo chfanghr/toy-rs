@@ -1,7 +1,7 @@
 use std::{env::args, fs::read_to_string};
 
 const DEMO_PROGRAM: &'static str = "
-        main = xor true false
+        main = 1 == neg 1
     ";
 
 fn main() -> Result<(), String> {

@@ -140,6 +140,7 @@ custom_derive! {
         Sub,
         Mul,
         Div,
+        Eq,
         IfThenElse,
         Constr
     }
@@ -153,6 +154,7 @@ impl PrimOpKind {
             PrimOpKind::Sub => Some("_prim_sub"),
             PrimOpKind::Mul => Some("_prim_mul"),
             PrimOpKind::Div => Some("_prim_div"),
+            PrimOpKind::Eq => Some("_prim_eq"),
             PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
             PrimOpKind::Constr => None,
         }
@@ -178,6 +180,7 @@ pub enum PrimOp {
     Sub,
     Mul,
     Div,
+    Eq,
     IfThenElse,
     Constr(ConstrPrimOp),
 }
@@ -190,6 +193,7 @@ impl PrimOp {
             PrimOpKind::Sub => Some(PrimOp::Sub),
             PrimOpKind::Mul => Some(PrimOp::Mul),
             PrimOpKind::Div => Some(PrimOp::Div),
+            PrimOpKind::Eq => Some(PrimOp::Eq),
             PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
             PrimOpKind::Constr => None,
         }
@@ -201,6 +205,7 @@ impl PrimOp {
             PrimOp::Sub => PrimOpKind::Sub,
             PrimOp::Mul => PrimOpKind::Mul,
             PrimOp::Div => PrimOpKind::Div,
+            PrimOp::Eq => PrimOpKind::Eq,
             PrimOp::IfThenElse => PrimOpKind::IfThenElse,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
@@ -213,6 +218,7 @@ impl PrimOp {
             PrimOp::Sub => 2,
             PrimOp::Mul => 2,
             PrimOp::Div => 2,
+            PrimOp::Eq => 2,
             PrimOp::IfThenElse => 3,
             PrimOp::Constr(c) => c.arity as usize,
         }
@@ -589,7 +595,7 @@ impl Machine {
         f: F,
     ) -> Result<Node, String>
     where
-        F: Fn([i64; N]) -> Result<i64, String>,
+        F: Fn([i64; N]) -> Result<Node, String>,
     {
         let args_vec: Vec<i64> = arg_addrs
             .into_iter()
@@ -603,8 +609,20 @@ impl Machine {
         let args_arr: [i64; N] = args_vec
             .try_into()
             .map_err(|v: Vec<i64>| format!("expected {} args, got {}", N, v.len()))?;
-        let res = f(args_arr).map_err(|e| format!("error while executing the prim op: {}", e))?;
-        Ok(Node::Num(IntegerNode(res)))
+        f(args_arr).map_err(|e| format!("error while executing the prim op: {}", e))
+    }
+
+    fn impl_prim_all_num_args_ret_num<const N: usize, F>(
+        &mut self,
+        arg_addrs: Vec<Addr>,
+        f: F,
+    ) -> Result<Node, String>
+    where
+        F: Fn([i64; N]) -> Result<i64, String>,
+    {
+        self.impl_prim_all_num_args(arg_addrs, |args| {
+            f(args).map(|x| Node::Num(IntegerNode::new(x)))
+        })
     }
 
     fn run_prim_op_nf(
@@ -613,16 +631,20 @@ impl Machine {
         arg_addrs: Vec<Addr>,
     ) -> Result<Node, String> {
         match prim_op {
-            PrimOpKind::Neg => self.impl_prim_all_num_args(arg_addrs, |[x]| Ok(-x)),
-            PrimOpKind::Add => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x + y)),
-            PrimOpKind::Sub => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x - y)),
-            PrimOpKind::Mul => self.impl_prim_all_num_args(arg_addrs, |[x, y]| Ok(x * y)),
-            PrimOpKind::Div => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
+            PrimOpKind::Neg => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x]| Ok(-x)),
+            PrimOpKind::Add => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x + y)),
+            PrimOpKind::Sub => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x - y)),
+            PrimOpKind::Mul => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x * y)),
+            PrimOpKind::Div => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| {
                 if y == 0 {
                     Err("divide by zero".to_string())
                 } else {
                     Ok(x / y)
                 }
+            }),
+            PrimOpKind::Eq => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
+                let tag = if x == y { TRUE_TAG } else { FALSE_TAG };
+                Ok(Node::Data(DataNode::new(tag, vec![])))
             }),
             _ => panic!("BUG: run_prim_op_nf doesn't handle constructor or if-then-else"),
         }

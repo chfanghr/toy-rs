@@ -14,6 +14,20 @@ use crate::{
     parser::ast::*,
 };
 
+// To translate operators to function names, which should be then implemented by the vm.
+pub const PRIM_BOOLEAN_OR_NAME: &'static str = "_prim_boolean_or";
+pub const PRIM_BOOLEAN_AND_NAME: &'static str = "_prim_boolean_and";
+pub const PRIM_GT_NAME: &'static str = "_prim_gt";
+pub const PRIM_GE_NAME: &'static str = "_prim_ge";
+pub const PRIM_LT_NAME: &'static str = "_prim_lt";
+pub const PRIM_LE_NAME: &'static str = "_prim_le";
+pub const PRIM_EQ_NAME: &'static str = "_prim_eq";
+pub const PRIM_NE_NAME: &'static str = "_prim_ne";
+pub const PRIM_ADD_NAME: &'static str = "_prim_add";
+pub const PRIM_SUB_NAME: &'static str = "_prim_sub";
+pub const PRIM_MUL_NAME: &'static str = "_prim_mul";
+pub const PRIM_DIV_NAME: &'static str = "_prim_div";
+
 pub fn must_lex_and_parse_sc(inp: &str) -> SuperCombinator<Name> {
     lexer::token_vec()
         .parse(inp)
@@ -167,39 +181,51 @@ fn expr<'src>() -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap
             def_infix_op(
                 right(2),
                 just_bool_op(BoolOp::Or).boxed(),
-                "_prim_boolean_or",
+                PRIM_BOOLEAN_OR_NAME,
             ),
             def_infix_op(
                 right(3),
                 just_bool_op(BoolOp::And).boxed(),
-                "_prim_boolean_and",
+                PRIM_BOOLEAN_AND_NAME,
             ),
-            def_infix_op(none(4), just_rel_op(RelOp::GreaterThan).boxed(), "_prim_gt"),
+            def_infix_op(
+                none(4),
+                just_rel_op(RelOp::GreaterThan).boxed(),
+                PRIM_GT_NAME,
+            ),
             def_infix_op(
                 none(4),
                 just_rel_op(RelOp::GreaterOrEqualTo).boxed(),
-                "_prim_ge",
+                PRIM_GE_NAME,
             ),
-            def_infix_op(none(4), just_rel_op(RelOp::LessThan).boxed(), "_prim_lt"),
+            def_infix_op(none(4), just_rel_op(RelOp::LessThan).boxed(), PRIM_LT_NAME),
             def_infix_op(
                 none(4),
                 just_rel_op(RelOp::LessOrEqualTo).boxed(),
-                "_prim_le",
+                PRIM_LE_NAME,
             ),
-            def_infix_op(none(4), just_rel_op(RelOp::EqualTo).boxed(), "_prim_eq"),
-            def_infix_op(none(4), just_rel_op(RelOp::NotEqualTo).boxed(), "_prim_ne"),
-            def_infix_op(left(6), just_arith_op(ArithOp::Plus).boxed(), "_prim_add"),
+            def_infix_op(none(4), just_rel_op(RelOp::EqualTo).boxed(), PRIM_EQ_NAME),
+            def_infix_op(
+                none(4),
+                just_rel_op(RelOp::NotEqualTo).boxed(),
+                PRIM_NE_NAME,
+            ),
+            def_infix_op(left(6), just_arith_op(ArithOp::Plus).boxed(), PRIM_ADD_NAME),
             def_infix_op(
                 left(6),
                 just_arith_op(ArithOp::Subtract).boxed(),
-                "_prim_sub",
+                PRIM_SUB_NAME,
             ),
             def_infix_op(
                 left(7),
                 just_arith_op(ArithOp::Multiply).boxed(),
-                "_prim_mul",
+                PRIM_MUL_NAME,
             ),
-            def_infix_op(left(7), just_arith_op(ArithOp::Divide).boxed(), "_prim_div"),
+            def_infix_op(
+                left(7),
+                just_arith_op(ArithOp::Divide).boxed(),
+                PRIM_DIV_NAME,
+            ),
         ));
 
         choice((

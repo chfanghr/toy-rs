@@ -9,7 +9,11 @@ use std::{
 
 use itertools::{Either, Itertools};
 
-use crate::parser::{ast, must_lex_and_parse_sc, prelude};
+use crate::parser::{
+    ast, must_lex_and_parse_sc, prelude, PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME,
+    PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME,
+    PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME, PRIM_SUB_NAME,
+};
 
 #[derive(Debug, Clone)]
 pub struct Stack<T>(pub LinkedList<T>);
@@ -141,6 +145,8 @@ custom_derive! {
         Mul,
         Div,
         Eq,
+        Lt,
+        Gt,
         IfThenElse,
         Constr
     }
@@ -150,11 +156,13 @@ impl PrimOpKind {
     fn to_name(&self) -> Option<&'static str> {
         match self {
             PrimOpKind::Neg => Some("_prim_neg"),
-            PrimOpKind::Add => Some("_prim_add"),
-            PrimOpKind::Sub => Some("_prim_sub"),
-            PrimOpKind::Mul => Some("_prim_mul"),
-            PrimOpKind::Div => Some("_prim_div"),
-            PrimOpKind::Eq => Some("_prim_eq"),
+            PrimOpKind::Add => Some(PRIM_ADD_NAME),
+            PrimOpKind::Sub => Some(PRIM_SUB_NAME),
+            PrimOpKind::Mul => Some(PRIM_MUL_NAME),
+            PrimOpKind::Div => Some(PRIM_DIV_NAME),
+            PrimOpKind::Eq => Some(PRIM_EQ_NAME),
+            PrimOpKind::Lt => Some(PRIM_LT_NAME),
+            PrimOpKind::Gt => Some(PRIM_GT_NAME),
             PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
             PrimOpKind::Constr => None,
         }
@@ -181,6 +189,8 @@ pub enum PrimOp {
     Mul,
     Div,
     Eq,
+    Lt,
+    Gt,
     IfThenElse,
     Constr(ConstrPrimOp),
 }
@@ -194,10 +204,13 @@ impl PrimOp {
             PrimOpKind::Mul => Some(PrimOp::Mul),
             PrimOpKind::Div => Some(PrimOp::Div),
             PrimOpKind::Eq => Some(PrimOp::Eq),
+            PrimOpKind::Lt => Some(PrimOp::Lt),
+            PrimOpKind::Gt => Some(PrimOp::Gt),
             PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
             PrimOpKind::Constr => None,
         }
     }
+
     fn get_kind(&self) -> PrimOpKind {
         match self {
             PrimOp::Neg => PrimOpKind::Neg,
@@ -206,6 +219,8 @@ impl PrimOp {
             PrimOp::Mul => PrimOpKind::Mul,
             PrimOp::Div => PrimOpKind::Div,
             PrimOp::Eq => PrimOpKind::Eq,
+            PrimOp::Lt => PrimOpKind::Lt,
+            PrimOp::Gt => PrimOpKind::Gt,
             PrimOp::IfThenElse => PrimOpKind::IfThenElse,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
@@ -219,6 +234,8 @@ impl PrimOp {
             PrimOp::Mul => 2,
             PrimOp::Div => 2,
             PrimOp::Eq => 2,
+            PrimOp::Lt => 2,
+            PrimOp::Gt => 2,
             PrimOp::IfThenElse => 3,
             PrimOp::Constr(c) => c.arity as usize,
         }
@@ -311,10 +328,16 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
             "if = {}",
             PrimOpKind::IfThenElse.to_name().unwrap()
         )),
-        must_lex_and_parse_sc("and x y = if x y false"),
-        must_lex_and_parse_sc("or x y = if x true y"),
+        must_lex_and_parse_sc(&format!("{} x y = if x y false", PRIM_BOOLEAN_AND_NAME)),
+        must_lex_and_parse_sc(&format!("{} x y = if x true y", PRIM_BOOLEAN_OR_NAME)),
         must_lex_and_parse_sc("not x = if x false true"),
         must_lex_and_parse_sc("xor x y = if x (not y) y"),
+        must_lex_and_parse_sc(&format!(
+            "{} x y = not ({} x y)",
+            PRIM_NE_NAME, PRIM_EQ_NAME
+        )),
+        must_lex_and_parse_sc(&format!("{} x y = (x < y) || (x == y) ", PRIM_LE_NAME)),
+        must_lex_and_parse_sc(&format!("{} x y = (x > y) || (x == y) ", PRIM_GE_NAME)),
     ]
 }
 
@@ -644,6 +667,14 @@ impl Machine {
             }),
             PrimOpKind::Eq => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
                 let tag = if x == y { TRUE_TAG } else { FALSE_TAG };
+                Ok(Node::Data(DataNode::new(tag, vec![])))
+            }),
+            PrimOpKind::Lt => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
+                let tag = if x < y { TRUE_TAG } else { FALSE_TAG };
+                Ok(Node::Data(DataNode::new(tag, vec![])))
+            }),
+            PrimOpKind::Gt => self.impl_prim_all_num_args(arg_addrs, |[x, y]| {
+                let tag = if x > y { TRUE_TAG } else { FALSE_TAG };
                 Ok(Node::Data(DataNode::new(tag, vec![])))
             }),
             _ => panic!("BUG: run_prim_op_nf doesn't handle constructor or if-then-else"),

@@ -152,6 +152,7 @@ custom_derive! {
         Lt,
         Gt,
         IfThenElse,
+        MatchPair,
         Constr
     }
 }
@@ -168,6 +169,7 @@ impl PrimOpKind {
             PrimOpKind::Lt => Some(PRIM_LT_NAME),
             PrimOpKind::Gt => Some(PRIM_GT_NAME),
             PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
+            PrimOpKind::MatchPair => Some("_prim_match_pair"),
             PrimOpKind::Constr => None,
         }
     }
@@ -196,6 +198,7 @@ pub enum PrimOp {
     Lt,
     Gt,
     IfThenElse,
+    MatchPair,
     Constr(ConstrPrimOp),
 }
 
@@ -211,6 +214,7 @@ impl PrimOp {
             PrimOpKind::Lt => Some(PrimOp::Lt),
             PrimOpKind::Gt => Some(PrimOp::Gt),
             PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
+            PrimOpKind::MatchPair => Some(PrimOp::MatchPair),
             PrimOpKind::Constr => None,
         }
     }
@@ -226,6 +230,7 @@ impl PrimOp {
             PrimOp::Lt => PrimOpKind::Lt,
             PrimOp::Gt => PrimOpKind::Gt,
             PrimOp::IfThenElse => PrimOpKind::IfThenElse,
+            PrimOp::MatchPair => PrimOpKind::MatchPair,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -241,6 +246,7 @@ impl PrimOp {
             PrimOp::Lt => 2,
             PrimOp::Gt => 2,
             PrimOp::IfThenElse => 3,
+            PrimOp::MatchPair => 2,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -344,25 +350,31 @@ pub struct Machine {
 pub const FALSE_TAG: u64 = 0;
 pub const TRUE_TAG: u64 = 1;
 
+pub const PAIR_TAG: u64 = 0;
+
 fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
-        must_lex_and_parse_sc(&format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
-        must_lex_and_parse_sc(&format!("false = Pack{{{},0}}", FALSE_TAG)),
-        must_lex_and_parse_sc(&format!("true = Pack{{{},0}}", TRUE_TAG)),
-        must_lex_and_parse_sc(&format!(
+        must_lex_and_parse_sc(format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
+        must_lex_and_parse_sc(format!("false = Pack{{{},0}}", FALSE_TAG)),
+        must_lex_and_parse_sc(format!("true = Pack{{{},0}}", TRUE_TAG)),
+        must_lex_and_parse_sc(format!(
             "if = {}",
             PrimOpKind::IfThenElse.to_name().unwrap()
         )),
-        must_lex_and_parse_sc(&format!("{} x y = if x y false", PRIM_BOOLEAN_AND_NAME)),
-        must_lex_and_parse_sc(&format!("{} x y = if x true y", PRIM_BOOLEAN_OR_NAME)),
+        must_lex_and_parse_sc(format!("{} x y = if x y false", PRIM_BOOLEAN_AND_NAME)),
+        must_lex_and_parse_sc(format!("{} x y = if x true y", PRIM_BOOLEAN_OR_NAME)),
         must_lex_and_parse_sc("not x = if x false true"),
         must_lex_and_parse_sc("xor x y = if x (not y) y"),
-        must_lex_and_parse_sc(&format!(
-            "{} x y = not ({} x y)",
-            PRIM_NE_NAME, PRIM_EQ_NAME
+        must_lex_and_parse_sc(format!("{} x y = not ({} x y)", PRIM_NE_NAME, PRIM_EQ_NAME)),
+        must_lex_and_parse_sc(format!("{} x y = (x < y) || (x == y) ", PRIM_LE_NAME)),
+        must_lex_and_parse_sc(format!("{} x y = (x > y) || (x == y) ", PRIM_GE_NAME)),
+        must_lex_and_parse_sc(format!("mkPair a b = Pack{{{}, 2}} a b", PAIR_TAG)),
+        must_lex_and_parse_sc(format!(
+            "casePair p f = {} p f",
+            PrimOpKind::MatchPair.to_name().unwrap()
         )),
-        must_lex_and_parse_sc(&format!("{} x y = (x < y) || (x == y) ", PRIM_LE_NAME)),
-        must_lex_and_parse_sc(&format!("{} x y = (x > y) || (x == y) ", PRIM_GE_NAME)),
+        must_lex_and_parse_sc("fst p = casePair p k"),
+        must_lex_and_parse_sc("snd p = casePair p k1"),
     ]
 }
 
@@ -607,6 +619,45 @@ impl Machine {
         }
     }
 
+    fn impl_prim_match_pair(
+        &mut self,
+        arg_addrs: Vec<PrimOpArgAddr>,
+    ) -> Result<PrimOpResult, String> {
+        let arg_addrs: [PrimOpArgAddr; 2] =
+            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
+                format!("matchPair prim op expected 2 args, got {}", v.len())
+            })?;
+        let [pair_addr, f_addr] = arg_addrs.map(|x| x.get_addr());
+
+        let next = match self.heap.access(pair_addr).unwrap().borrow().deref() {
+            Node::Num(_) => {
+                // Otherwise it won't stop evaluating
+                Err("pair expression evaluated to num, while data is expected".to_string())
+            }
+            Node::Data(d) => match (d.tag, d.field_addrs.len()) {
+                (PAIR_TAG, 2) => {
+                    let [a_addr, b_addr] = d.field_addrs.clone().try_into().unwrap();
+                    Ok(Either::Right((a_addr, b_addr)))
+                }
+                (tag, fields_len) => Err(format!(
+                    "pair expression didn't evaluate to a pair, tag: {}, fields len: {}",
+                    tag, fields_len
+                )),
+            },
+            _ => Ok(Either::Left(pair_addr)),
+        }?;
+
+        Ok(match next {
+            Either::Left(addr) => PrimOpResult::NeedFurtherEvaluate(addr),
+            Either::Right((a_addr, b_addr)) => {
+                let node = Node::Ap(ApplicationNode::new(f_addr, a_addr));
+                let l_addr = self.alloc_node(node);
+                let node = Node::Ap(ApplicationNode::new(l_addr, b_addr));
+                PrimOpResult::Done(node)
+            }
+        })
+    }
+
     fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<(), String> {
         assert_eq!(self.stack.pop(), Some(node_addr));
         let arity = prim_node.0.get_arity();
@@ -655,6 +706,7 @@ impl Machine {
             PrimOp::Lt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x < y)),
             PrimOp::Gt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x > y)),
             PrimOp::Constr(constr_prim_op) => self.impl_prim_constr(arg_addrs, constr_prim_op),
+            PrimOp::MatchPair => self.impl_prim_match_pair(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
         }?;
 

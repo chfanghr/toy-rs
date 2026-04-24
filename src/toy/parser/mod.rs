@@ -28,9 +28,9 @@ pub const PRIM_SUB_NAME: &'static str = "_prim_sub";
 pub const PRIM_MUL_NAME: &'static str = "_prim_mul";
 pub const PRIM_DIV_NAME: &'static str = "_prim_div";
 
-pub fn must_lex_and_parse_sc(inp: &str) -> SuperCombinator<Name> {
+pub fn must_lex_and_parse_sc(inp: impl AsRef<str>) -> SuperCombinator<Name> {
     lexer::token_vec()
-        .parse(inp)
+        .parse(inp.as_ref())
         .into_result()
         .and_then(|toks| super_comb().parse(&toks).into_result())
         .unwrap()
@@ -40,6 +40,7 @@ pub fn prelude() -> Vec<SuperCombinator<Name>> {
     vec![
         must_lex_and_parse_sc("i x = x"),
         must_lex_and_parse_sc("k x y = x"),
+        must_lex_and_parse_sc("k1 x y = y"),
         must_lex_and_parse_sc("s f g x y = f x (g y)"),
         must_lex_and_parse_sc("fix f = letrec x = f x in x"),
     ]

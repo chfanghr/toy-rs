@@ -154,6 +154,7 @@ custom_derive! {
         IfThenElse,
         MatchPair,
         MatchList,
+        Abort,
         Constr
     }
 }
@@ -172,6 +173,7 @@ impl PrimOpKind {
             PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
             PrimOpKind::MatchPair => Some("_prim_match_pair"),
             PrimOpKind::MatchList => Some("_prim_match_list"),
+            PrimOpKind::Abort => Some("_prim_abort"),
             PrimOpKind::Constr => None,
         }
     }
@@ -202,6 +204,7 @@ pub enum PrimOp {
     IfThenElse,
     MatchPair,
     MatchList,
+    Abort,
     Constr(ConstrPrimOp),
 }
 
@@ -219,6 +222,7 @@ impl PrimOp {
             PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
             PrimOpKind::MatchPair => Some(PrimOp::MatchPair),
             PrimOpKind::MatchList => Some(PrimOp::MatchList),
+            PrimOpKind::Abort => Some(PrimOp::Abort),
             PrimOpKind::Constr => None,
         }
     }
@@ -236,6 +240,7 @@ impl PrimOp {
             PrimOp::IfThenElse => PrimOpKind::IfThenElse,
             PrimOp::MatchPair => PrimOpKind::MatchPair,
             PrimOp::MatchList => PrimOpKind::MatchList,
+            PrimOp::Abort => PrimOpKind::Abort,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -253,6 +258,7 @@ impl PrimOp {
             PrimOp::IfThenElse => 3,
             PrimOp::MatchPair => 2,
             PrimOp::MatchList => 3,
+            PrimOp::Abort => 0,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -400,6 +406,9 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc("length l = caseList l lengthOnNil lengthOnCons"),
         must_lex_and_parse_sc("lengthOnNil = 0"),
         must_lex_and_parse_sc("lengthOnCons x xs = 1 + length xs"),
+        must_lex_and_parse_sc("head l = caseList l abort K"),
+        must_lex_and_parse_sc("tail l = caseList l abort K1"),
+        must_lex_and_parse_sc(format!("panic = {}", PrimOpKind::Abort.to_name().unwrap())),
     ]
 }
 
@@ -794,6 +803,7 @@ impl Machine {
             PrimOp::MatchPair => self.impl_prim_match_pair(arg_addrs),
             PrimOp::MatchList => self.impl_prim_match_list(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
+            PrimOp::Abort => Err("user code called abort".to_string()),
         }?;
 
         match res {

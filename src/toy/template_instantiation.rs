@@ -153,6 +153,7 @@ custom_derive! {
         Gt,
         IfThenElse,
         MatchPair,
+        MatchList,
         Constr
     }
 }
@@ -170,6 +171,7 @@ impl PrimOpKind {
             PrimOpKind::Gt => Some(PRIM_GT_NAME),
             PrimOpKind::IfThenElse => Some("_prim_if_then_else"),
             PrimOpKind::MatchPair => Some("_prim_match_pair"),
+            PrimOpKind::MatchList => Some("_prim_match_list"),
             PrimOpKind::Constr => None,
         }
     }
@@ -199,6 +201,7 @@ pub enum PrimOp {
     Gt,
     IfThenElse,
     MatchPair,
+    MatchList,
     Constr(ConstrPrimOp),
 }
 
@@ -215,6 +218,7 @@ impl PrimOp {
             PrimOpKind::Gt => Some(PrimOp::Gt),
             PrimOpKind::IfThenElse => Some(PrimOp::IfThenElse),
             PrimOpKind::MatchPair => Some(PrimOp::MatchPair),
+            PrimOpKind::MatchList => Some(PrimOp::MatchList),
             PrimOpKind::Constr => None,
         }
     }
@@ -231,6 +235,7 @@ impl PrimOp {
             PrimOp::Gt => PrimOpKind::Gt,
             PrimOp::IfThenElse => PrimOpKind::IfThenElse,
             PrimOp::MatchPair => PrimOpKind::MatchPair,
+            PrimOp::MatchList => PrimOpKind::MatchList,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -247,6 +252,7 @@ impl PrimOp {
             PrimOp::Gt => 2,
             PrimOp::IfThenElse => 3,
             PrimOp::MatchPair => 2,
+            PrimOp::MatchList => 3,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -269,6 +275,13 @@ impl PrimOpArgAddr {
         *match self {
             PrimOpArgAddr::DataNode(addr) => addr,
             PrimOpArgAddr::NotDataNode(addr) => addr,
+        }
+    }
+
+    pub fn is_whnf(&self) -> bool {
+        match self {
+            PrimOpArgAddr::DataNode(_) => true,
+            PrimOpArgAddr::NotDataNode(_) => false,
         }
     }
 }
@@ -352,6 +365,9 @@ pub const TRUE_TAG: u64 = 1;
 
 pub const PAIR_TAG: u64 = 0;
 
+pub const NIL_TAG: u64 = 0;
+pub const CONS_TAG: u64 = 1;
+
 fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
         must_lex_and_parse_sc(format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
@@ -375,6 +391,15 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         )),
         must_lex_and_parse_sc("fst p = casePair p k"),
         must_lex_and_parse_sc("snd p = casePair p k1"),
+        must_lex_and_parse_sc(format!("cons = Pack{{{}, 2}}", CONS_TAG)),
+        must_lex_and_parse_sc(format!("nil = Pack{{{}, 0}}", NIL_TAG)),
+        must_lex_and_parse_sc(format!(
+            "caseList l onNil onCons = {} l onNil onCons",
+            PrimOpKind::MatchList.to_name().unwrap()
+        )),
+        must_lex_and_parse_sc("length l = caseList l lengthOnNil lengthOnCons"),
+        must_lex_and_parse_sc("lengthOnNil = 0"),
+        must_lex_and_parse_sc("lengthOnCons x xs = 1 + length xs"),
     ]
 }
 
@@ -592,14 +617,22 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
     ) -> Result<PrimOpResult, String> {
-        let arg_addrs: [PrimOpArgAddr; 3] =
+        let [pred_addr, then_branch_addr, else_branch_addr] =
             arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
                 format!("if-then-else prim op expected 3 args, got {}", v.len())
             })?;
 
-        let [pred_addr, then_branch_addr, else_branch_addr] = arg_addrs.map(|x| x.get_addr());
+        if !pred_addr.is_whnf() {
+            return Ok(PrimOpResult::NeedFurtherEvaluate(pred_addr.get_addr()));
+        }
 
-        match self.heap.access(pred_addr).unwrap().borrow().deref() {
+        match self
+            .heap
+            .access(pred_addr.get_addr())
+            .unwrap()
+            .borrow()
+            .deref()
+        {
             Node::Num(_) => {
                 // Otherwise it won't stop evaluating
                 Err("predicate expression evaluated to num".to_string())
@@ -613,9 +646,9 @@ impl Machine {
                         tag, fields_len
                     )),
                 }?;
-                Ok(PrimOpResult::Done(Node::Indirect(next_addr)))
+                Ok(PrimOpResult::Done(Node::Indirect(next_addr.get_addr())))
             }
-            _ => Ok(PrimOpResult::NeedFurtherEvaluate(pred_addr)),
+            _ => unreachable!("BUG: pred is not in whnf"),
         }
     }
 
@@ -623,13 +656,21 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
     ) -> Result<PrimOpResult, String> {
-        let arg_addrs: [PrimOpArgAddr; 2] =
-            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-                format!("matchPair prim op expected 2 args, got {}", v.len())
-            })?;
-        let [pair_addr, f_addr] = arg_addrs.map(|x| x.get_addr());
+        let [pair_addr, f_addr] = arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
+            format!("matchPair prim op expected 2 args, got {}", v.len())
+        })?;
 
-        let next = match self.heap.access(pair_addr).unwrap().borrow().deref() {
+        if !pair_addr.is_whnf() {
+            return Ok(PrimOpResult::NeedFurtherEvaluate(pair_addr.get_addr()));
+        }
+
+        let (a_addr, b_addr) = match self
+            .heap
+            .access(pair_addr.get_addr())
+            .unwrap()
+            .borrow()
+            .deref()
+        {
             Node::Num(_) => {
                 // Otherwise it won't stop evaluating
                 Err("pair expression evaluated to num, while data is expected".to_string())
@@ -637,25 +678,69 @@ impl Machine {
             Node::Data(d) => match (d.tag, d.field_addrs.len()) {
                 (PAIR_TAG, 2) => {
                     let [a_addr, b_addr] = d.field_addrs.clone().try_into().unwrap();
-                    Ok(Either::Right((a_addr, b_addr)))
+                    Ok((a_addr, b_addr))
                 }
                 (tag, fields_len) => Err(format!(
-                    "pair expression didn't evaluate to a pair, tag: {}, fields len: {}",
+                    "unrecognized pair constructor, tag: {}, fields len: {}",
                     tag, fields_len
                 )),
             },
-            _ => Ok(Either::Left(pair_addr)),
+            _ => unreachable!("BUG: pair is not in whnf"),
         }?;
 
-        Ok(match next {
-            Either::Left(addr) => PrimOpResult::NeedFurtherEvaluate(addr),
-            Either::Right((a_addr, b_addr)) => {
-                let node = Node::Ap(ApplicationNode::new(f_addr, a_addr));
-                let l_addr = self.alloc_node(node);
-                let node = Node::Ap(ApplicationNode::new(l_addr, b_addr));
-                PrimOpResult::Done(node)
+        let node = Node::Ap(ApplicationNode::new(f_addr.get_addr(), a_addr));
+        let l_addr = self.alloc_node(node);
+        let node = Node::Ap(ApplicationNode::new(l_addr, b_addr));
+        Ok(PrimOpResult::Done(node))
+    }
+
+    fn impl_prim_match_list(
+        &mut self,
+        arg_addrs: Vec<PrimOpArgAddr>,
+    ) -> Result<PrimOpResult, String> {
+        let [list_addr, on_nil_addr, on_cons_addr]: [PrimOpArgAddr; 3] =
+            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
+                format!("matchList prim op expected 3 args, got {}", v.len())
+            })?;
+
+        if !list_addr.is_whnf() {
+            return Ok(PrimOpResult::NeedFurtherEvaluate(list_addr.get_addr()));
+        }
+
+        let next = match self
+            .heap
+            .access(list_addr.get_addr())
+            .unwrap()
+            .borrow()
+            .deref()
+        {
+            Node::Num(_) => {
+                // Otherwise it won't stop evaluating
+                Err("list expression evaluated to num, while data is expected".to_string())
             }
-        })
+            Node::Data(d) => match (d.tag, d.field_addrs.len()) {
+                (NIL_TAG, 0) => Ok(Either::Left(())),
+                (CONS_TAG, 2) => {
+                    let [head_addr, tail_addr] = d.field_addrs.clone().try_into().unwrap();
+                    Ok(Either::Right((head_addr, tail_addr)))
+                }
+                (tag, fields_len) => Err(format!(
+                    "unrecognized list constructor, tag: {}, fields len: {}",
+                    tag, fields_len
+                )),
+            },
+            _ => unreachable!("BUG: pair is not in whnf"),
+        }?;
+
+        Ok(PrimOpResult::Done(match next {
+            Either::Left(_) => Node::Indirect(on_nil_addr.get_addr()),
+            Either::Right((head_addr, tail_addr)) => {
+                let node = Node::Ap(ApplicationNode::new(on_cons_addr.get_addr(), head_addr));
+                let l_addr = self.alloc_node(node);
+                let node = Node::Ap(ApplicationNode::new(l_addr, tail_addr));
+                node
+            }
+        }))
     }
 
     fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<(), String> {
@@ -707,6 +792,7 @@ impl Machine {
             PrimOp::Gt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x > y)),
             PrimOp::Constr(constr_prim_op) => self.impl_prim_constr(arg_addrs, constr_prim_op),
             PrimOp::MatchPair => self.impl_prim_match_pair(arg_addrs),
+            PrimOp::MatchList => self.impl_prim_match_list(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
         }?;
 

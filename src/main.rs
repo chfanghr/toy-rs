@@ -1,7 +1,7 @@
 use std::{env::args, fs::read_to_string};
 
 const DEMO_PROGRAM: &'static str = "
-        main = fst (snd (mkPair 1 (mkPair 2 3)))
+        main = length (cons 0 (cons 1 (cons 2 nil)))
     ";
 
 fn main() -> Result<(), String> {

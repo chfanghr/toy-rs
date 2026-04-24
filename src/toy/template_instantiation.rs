@@ -50,6 +50,10 @@ impl<T> Stack<T> {
     pub fn peak_n_releaxed(&self, n: usize) -> Vec<&T> {
         self.0.iter().take(n).collect()
     }
+
+    pub fn push_vec(&mut self, v: Vec<T>) {
+        v.into_iter().for_each(|x| self.push(x));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,7 +215,7 @@ impl PrimOp {
         }
     }
 
-    fn get_kind(&self) -> PrimOpKind {
+    fn _get_kind(&self) -> PrimOpKind {
         match self {
             PrimOp::Neg => PrimOpKind::Neg,
             PrimOp::Add => PrimOpKind::Add,
@@ -238,6 +242,27 @@ impl PrimOp {
             PrimOp::Gt => 2,
             PrimOp::IfThenElse => 3,
             PrimOp::Constr(c) => c.arity as usize,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PrimOpResult {
+    NeedFurtherEvaluate(Addr),
+    Done(Node),
+}
+
+#[derive(Debug, Clone)]
+enum PrimOpArgAddr {
+    DataNode(Addr),
+    NotDataNode(Addr),
+}
+
+impl PrimOpArgAddr {
+    pub fn get_addr(&self) -> Addr {
+        *match self {
+            PrimOpArgAddr::DataNode(addr) => addr,
+            PrimOpArgAddr::NotDataNode(addr) => addr,
         }
     }
 }
@@ -464,163 +489,25 @@ impl Machine {
         }
     }
 
-    fn handle_prim_node(&mut self, node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
-        match &prim.0 {
-            PrimOp::Constr(c) => self.handle_prim_node_constr(node_addr, c),
-            PrimOp::IfThenElse => self.handle_prim_node_if_then_else(node_addr),
-            _ => self.handle_prim_node_nf(node_addr, prim),
-        }
-    }
-
-    fn handle_prim_node_constr(
-        &mut self,
-        node_addr: Addr,
-        constr_prim_op: &ConstrPrimOp,
-    ) -> Result<(), String> {
-        assert_eq!(self.stack.pop(), Some(node_addr));
-        let arity = constr_prim_op.arity;
-        let ap_node_addrs = self.stack.pop_n_releaxed(arity);
-        let num_popped = ap_node_addrs.len();
-
-        if num_popped != arity {
-            Err(format!(
-                "constructor expected {} args, got {}",
-                arity, num_popped
-            ))?
-        }
-
-        let node_to_override = ap_node_addrs.last().copied().unwrap_or(node_addr);
-
-        let arg_addrs = ap_node_addrs
-            .into_iter()
-            .map(
-                |addr| match self.heap.access(addr).unwrap().borrow().deref() {
-                    Node::Ap(a) => a.r,
-                    node => panic!("BUG: expected Ap node, got {:?}", node),
-                },
-            )
-            .collect::<Vec<Addr>>();
-
-        let data_node = Node::Data(DataNode::new(constr_prim_op.tag, arg_addrs));
-
-        self.replace_node_at(node_to_override, data_node);
-
-        self.stack.push(node_to_override);
-
-        Ok(())
-    }
-
-    fn handle_prim_node_if_then_else(&mut self, node_addr: Addr) -> Result<(), String> {
-        assert_eq!(self.stack.pop(), Some(node_addr));
-        // stack layout deref:
-        // PrimNode IfThenElse
-        // Ap _l cond
-        // Ap _l then_branch
-        // Ap _l else_branch
-
-        let pred_ap_addr = self.stack.pop().ok_or("cond expr missing".to_string())?;
-        let pred_addr = self.must_get_application_node_r_at(pred_ap_addr);
-
-        let then_branch_ap_addr = self.stack.pop().ok_or("then branch missing".to_string())?;
-        let then_branch_addr = self.must_get_application_node_r_at(then_branch_ap_addr);
-        let else_branch_ap_addr = self.stack.pop().ok_or("else branch missing".to_string())?;
-        let else_branch_addr = self.must_get_application_node_r_at(else_branch_ap_addr);
-
-        let node_addr_to_override = else_branch_ap_addr;
-
-        let next = match self.heap.access(pred_addr).unwrap().borrow().deref() {
-            Node::Num(_) => {
-                // Otherwise it won't stop evaluating
-                Err("predicate expression evaluated to num".to_string())?
-            }
-            Node::Data(d) => {
-                let next_addr = match (d.tag, d.field_addrs.len()) {
-                    (TRUE_TAG, 0) => Ok(then_branch_addr),
-                    (FALSE_TAG, 0) => Ok(else_branch_addr),
-                    (tag, fields_len) => Err(format!(
-                        "predicate expression didn't evaluate to boolean, tag: {}, fields len: {}",
-                        tag, fields_len
-                    )),
-                }?;
-                Either::Right(next_addr)
-            }
-            _ => Either::Left(pred_addr),
-        };
-
-        match next {
-            Either::Right(next_addr) => {
-                self.replace_node_at(node_addr_to_override, Node::Indirect(next_addr));
-                self.stack.push(node_addr_to_override);
-            }
-            Either::Left(pred_addr) => {
-                // Predicate expression needs to be evaluated to NF first
-                self.stack.push(else_branch_ap_addr);
-                self.stack.push(then_branch_ap_addr);
-                self.stack.push(pred_ap_addr);
-                self.stack.push(node_addr);
-                self.push_stack_frame();
-                self.stack.push(pred_addr);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn handle_prim_node_nf(&mut self, _node_addr: Addr, prim: &PrimNode) -> Result<(), String> {
-        let arity = prim.0.get_arity();
-        let num_addrs_to_pop = arity + 1;
-        let ap_node_addrs = self
-            .stack
-            .peak_n_releaxed(num_addrs_to_pop)
-            .into_iter()
-            .skip(1)
-            .copied()
-            .collect::<Vec<Addr>>();
-        if ap_node_addrs.len() != arity {
-            Err(format!(
-                "prim op {:?} expected {} arguments, got {}",
-                prim.0,
-                arity,
-                ap_node_addrs.len()
-            ))?
-        }
-        let node_addr_to_override = *ap_node_addrs.last().unwrap();
-        let (unevaluated, evaluated): (Vec<_>, Vec<_>) = ap_node_addrs
-            .into_iter()
-            .map(|addr| self.must_get_application_node_r_at(addr))
-            .partition_map(|arg_addr| {
-                let node = self.heap.access(arg_addr).unwrap().borrow();
-                if node.is_data_node() {
-                    // FIXME: dont think this is okay, there is no guarantee that a Data Node is fully reduced.
-                    Either::Right(arg_addr)
-                } else {
-                    Either::Left(arg_addr)
-                }
-            });
-        match unevaluated.into_iter().next() {
-            None => {
-                self.stack.pop_n_releaxed(num_addrs_to_pop);
-                let node = self.run_prim_op_nf(prim.0.get_kind(), evaluated)?;
-                self.replace_node_at(node_addr_to_override, node);
-                self.stack.push(node_addr_to_override);
-            }
-            Some(addr) => {
-                self.push_stack_frame();
-                self.stack.push(addr);
-            }
-        }
-        Ok(())
-    }
-
     fn impl_prim_all_num_args<const N: usize, F>(
         &mut self,
-        arg_addrs: Vec<Addr>,
+        arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<Node, String>
+    ) -> Result<PrimOpResult, String>
     where
         F: Fn([i64; N]) -> Result<Node, String>,
     {
-        let args_vec: Vec<i64> = arg_addrs
+        let (to_be_evaluated, evaluated): (Vec<Addr>, Vec<Addr>) =
+            arg_addrs.into_iter().partition_map(|addr| match addr {
+                PrimOpArgAddr::DataNode(addr) => Either::Right(addr),
+                PrimOpArgAddr::NotDataNode(addr) => Either::Left(addr),
+            });
+
+        if let Some(addr) = to_be_evaluated.first() {
+            return Ok(PrimOpResult::NeedFurtherEvaluate(*addr));
+        }
+
+        let num_args: Vec<i64> = evaluated
             .into_iter()
             .map(
                 |addr| match self.heap.access(addr).unwrap().borrow().deref() {
@@ -629,17 +516,19 @@ impl Machine {
                 },
             )
             .try_collect()?;
-        let args_arr: [i64; N] = args_vec
+        let num_args_arr: [i64; N] = num_args
             .try_into()
             .map_err(|v: Vec<i64>| format!("expected {} args, got {}", N, v.len()))?;
-        f(args_arr).map_err(|e| format!("error while executing the prim op: {}", e))
+
+        let node = f(num_args_arr)?;
+        Ok(PrimOpResult::Done(node))
     }
 
     fn impl_prim_all_num_args_ret_num<const N: usize, F>(
         &mut self,
-        arg_addrs: Vec<Addr>,
+        arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<Node, String>
+    ) -> Result<PrimOpResult, String>
     where
         F: Fn([i64; N]) -> Result<i64, String>,
     {
@@ -650,9 +539,9 @@ impl Machine {
 
     fn impl_prim_all_num_args_ret_bool<const N: usize, F>(
         &mut self,
-        arg_addrs: Vec<Addr>,
+        arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<Node, String>
+    ) -> Result<PrimOpResult, String>
     where
         F: Fn([i64; N]) -> Result<bool, String>,
     {
@@ -664,28 +553,126 @@ impl Machine {
         })
     }
 
-    fn run_prim_op_nf(
+    fn impl_prim_constr(
         &mut self,
-        prim_op: PrimOpKind,
-        arg_addrs: Vec<Addr>,
-    ) -> Result<Node, String> {
-        match prim_op {
-            PrimOpKind::Neg => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x]| Ok(-x)),
-            PrimOpKind::Add => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x + y)),
-            PrimOpKind::Sub => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x - y)),
-            PrimOpKind::Mul => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x * y)),
-            PrimOpKind::Div => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| {
+        arg_addrs: Vec<PrimOpArgAddr>,
+        constr_prim_op: &ConstrPrimOp,
+    ) -> Result<PrimOpResult, String> {
+        let arity = constr_prim_op.arity;
+
+        let num_fields_got = arg_addrs.len();
+        if num_fields_got != arity {
+            return Err(format!(
+                "constructor expected {} fields, got {}",
+                arity, num_fields_got
+            ));
+        }
+
+        let field_args = arg_addrs
+            .into_iter()
+            .map(|x| x.get_addr())
+            .collect::<Vec<_>>();
+        let node = Node::Data(DataNode::new(constr_prim_op.tag, field_args));
+        Ok(PrimOpResult::Done(node))
+    }
+
+    fn impl_prim_if_then_else(
+        &mut self,
+        arg_addrs: Vec<PrimOpArgAddr>,
+    ) -> Result<PrimOpResult, String> {
+        let arg_addrs: [PrimOpArgAddr; 3] =
+            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
+                format!("if-then-else prim op expected 3 args, got {}", v.len())
+            })?;
+
+        let [pred_addr, then_branch_addr, else_branch_addr] = arg_addrs.map(|x| x.get_addr());
+
+        match self.heap.access(pred_addr).unwrap().borrow().deref() {
+            Node::Num(_) => {
+                // Otherwise it won't stop evaluating
+                Err("predicate expression evaluated to num".to_string())
+            }
+            Node::Data(d) => {
+                let next_addr = match (d.tag, d.field_addrs.len()) {
+                    (TRUE_TAG, 0) => Ok(then_branch_addr),
+                    (FALSE_TAG, 0) => Ok(else_branch_addr),
+                    (tag, fields_len) => Err(format!(
+                        "predicate expression didn't evaluate to boolean, tag: {}, fields len: {}",
+                        tag, fields_len
+                    )),
+                }?;
+                Ok(PrimOpResult::Done(Node::Indirect(next_addr)))
+            }
+            _ => Ok(PrimOpResult::NeedFurtherEvaluate(pred_addr)),
+        }
+    }
+
+    fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<(), String> {
+        assert_eq!(self.stack.pop(), Some(node_addr));
+        let arity = prim_node.0.get_arity();
+        let ap_node_addrs = self.stack.pop_n_releaxed(arity);
+        let num_popped = ap_node_addrs.len();
+
+        if num_popped != arity {
+            Err(format!(
+                "prim op {:?} expected {} args, got {}",
+                prim_node.0, arity, num_popped
+            ))?
+        }
+
+        let node_addr_to_override = if arity == 0 {
+            node_addr
+        } else {
+            *ap_node_addrs.last().unwrap()
+        };
+
+        let arg_addrs = ap_node_addrs
+            .iter()
+            .map(|addr| {
+                let arg_addr = self.must_get_application_node_r_at(*addr);
+                let node = self.heap.access(arg_addr).unwrap().borrow();
+                if node.is_data_node() {
+                    PrimOpArgAddr::DataNode(arg_addr)
+                } else {
+                    PrimOpArgAddr::NotDataNode(arg_addr)
+                }
+            })
+            .collect::<Vec<_>>(); // Right: NF
+
+        let res = match &prim_node.0 {
+            PrimOp::Neg => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x]| Ok(-x)),
+            PrimOp::Add => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x + y)),
+            PrimOp::Sub => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x - y)),
+            PrimOp::Mul => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x * y)),
+            PrimOp::Div => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| {
                 if y == 0 {
                     Err("divide by zero".to_string())
                 } else {
                     Ok(x / y)
                 }
             }),
-            PrimOpKind::Eq => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x == y)),
-            PrimOpKind::Lt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x < y)),
-            PrimOpKind::Gt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x > y)),
-            _ => panic!("BUG: run_prim_op_nf doesn't handle constructor or if-then-else"),
-        }
+            PrimOp::Eq => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x == y)),
+            PrimOp::Lt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x < y)),
+            PrimOp::Gt => self.impl_prim_all_num_args_ret_bool(arg_addrs, |[x, y]| Ok(x > y)),
+            PrimOp::Constr(constr_prim_op) => self.impl_prim_constr(arg_addrs, constr_prim_op),
+            PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
+        }?;
+
+        match res {
+            PrimOpResult::NeedFurtherEvaluate(eval_addr) => {
+                self.stack
+                    .push_vec(ap_node_addrs.into_iter().rev().collect());
+                self.stack.push(node_addr);
+                self.push_stack_frame();
+                self.stack.push(eval_addr);
+            }
+            PrimOpResult::Done(node) => {
+                self.replace_node_at(node_addr_to_override, node);
+                self.stack.push(node_addr_to_override);
+            }
+        };
+
+        Ok(())
     }
 
     fn push_stack_frame(&mut self) {

@@ -406,8 +406,8 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc("length l = caseList l lengthOnNil lengthOnCons"),
         must_lex_and_parse_sc("lengthOnNil = 0"),
         must_lex_and_parse_sc("lengthOnCons x xs = 1 + length xs"),
-        must_lex_and_parse_sc("head l = caseList l abort K"),
-        must_lex_and_parse_sc("tail l = caseList l abort K1"),
+        must_lex_and_parse_sc("head l = caseList l panic k"),
+        must_lex_and_parse_sc("tail l = caseList l panic k1"),
         must_lex_and_parse_sc(format!("panic = {}", PrimOpKind::Abort.to_name().unwrap())),
     ]
 }

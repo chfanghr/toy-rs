@@ -444,7 +444,7 @@ impl Machine {
     }
 
     fn pop_stack_frame(&mut self) {
-        let height = self.dump.pop().copied().unwrap();
+        let height = self.dump.pop_cloned().unwrap();
         let bottom = self.dump.peak_cloned().unwrap_or(0);
         trace!("pop_stack_frame height={} bottom={}", height, bottom);
         self.stack.set_height(height);

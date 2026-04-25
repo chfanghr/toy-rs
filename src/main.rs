@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use log::{debug, trace};
-use std::{fs, io, path::PathBuf};
+use log::{debug, error, trace};
+use std::{fs, io, path::PathBuf, process::exit};
 use toy::parser::ast;
 
 #[derive(Parser, Debug)]
@@ -27,15 +27,24 @@ fn fallback_source() -> Box<dyn io::Read> {
     b
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
-    let entry_point = ast::Name::new(cli.entry);
 
     stderrlog::new()
         .module(module_path!())
         .verbosity(cli.verbose as usize)
         .timestamp(stderrlog::Timestamp::Millisecond)
-        .init()?;
+        .init()
+        .unwrap();
+
+    if let Err(err) = try_main(cli) {
+        error!("ERROR: \n{:?}", err);
+        exit(1)
+    }
+}
+
+fn try_main(cli: Cli) -> Result<()> {
+    let entry_point = ast::Name::new(cli.entry);
 
     let input_reader: Box<dyn io::Read> = cli.input.map_or_else(
         || Ok(fallback_source()),

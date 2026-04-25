@@ -1,3 +1,5 @@
+use monoid::Monoid;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Name(pub String);
 
@@ -80,3 +82,13 @@ pub struct SuperCombinator<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program<T>(pub Vec<SuperCombinator<T>>);
+
+impl<T> Monoid for Program<T> {
+    fn id() -> Self {
+        Self(vec![])
+    }
+
+    fn op(self, other: Self) -> Self {
+        Self(self.0.into_iter().chain(other.0).collect())
+    }
+}

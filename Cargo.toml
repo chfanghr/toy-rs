@@ -16,6 +16,7 @@ custom_derive = "0.1.7"
 enum_derive = "0.1.7"
 itertools = "0.14.0"
 log = "0.4.29"
+monoid = "0.0.5"
 stderrlog = "0.6.0"
 
 [lib]

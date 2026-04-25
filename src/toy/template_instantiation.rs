@@ -162,6 +162,7 @@ custom_derive! {
         MatchList,
         Abort,
         Stop,
+        Print,
         Constr
     }
 }
@@ -182,6 +183,7 @@ impl PrimOpKind {
             PrimOpKind::MatchList => Some("_prim_match_list"),
             PrimOpKind::Abort => Some("_prim_abort"),
             PrimOpKind::Stop => Some("_prim_stop"),
+            PrimOpKind::Print => Some("_prim_print"),
             PrimOpKind::Constr => None,
         }
     }
@@ -214,6 +216,7 @@ pub enum PrimOp {
     MatchList,
     Abort,
     Stop,
+    Print,
     Constr(ConstrPrimOp),
 }
 
@@ -233,6 +236,7 @@ impl PrimOp {
             PrimOpKind::MatchList => Some(PrimOp::MatchList),
             PrimOpKind::Abort => Some(PrimOp::Abort),
             PrimOpKind::Stop => Some(PrimOp::Stop),
+            PrimOpKind::Print => Some(PrimOp::Print),
             PrimOpKind::Constr => None,
         }
     }
@@ -252,6 +256,7 @@ impl PrimOp {
             PrimOp::MatchList => PrimOpKind::MatchList,
             PrimOp::Abort => PrimOpKind::Abort,
             PrimOp::Stop => PrimOpKind::Stop,
+            PrimOp::Print => PrimOpKind::Print,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -271,6 +276,7 @@ impl PrimOp {
             PrimOp::MatchList => 3,
             PrimOp::Abort => 0,
             PrimOp::Stop => 0,
+            PrimOp::Print => 2,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -377,6 +383,7 @@ pub struct Machine {
     pub heap: Heap<Rc<RefCell<Node>>>,
     pub globals: Assoc<ast::Name, Addr>,
     pub stats: Stats,
+    pub output: Vec<i64>,
 }
 
 pub const FALSE_TAG: u64 = 0;
@@ -426,6 +433,10 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc(format!("panic = {}", PrimOpKind::Abort.to_name().unwrap())),
         must_lex_and_parse_sc(format!("unit = Pack{{{}, 0}}", UNIT_TAG)),
         must_lex_and_parse_sc(format!("stop = {}", PrimOpKind::Stop.to_name().unwrap())),
+        must_lex_and_parse_sc(format!(
+            "print x y = {} x y",
+            PrimOpKind::Print.to_name().unwrap()
+        )),
     ]
 }
 
@@ -467,12 +478,14 @@ impl Machine {
         let stack = Stack::new();
         let dump = Stack::new();
         let stats = Stats::new();
+        let output = Vec::new();
         Machine {
             stack,
             dump,
             heap,
             globals,
             stats,
+            output,
         }
     }
 
@@ -480,15 +493,16 @@ impl Machine {
         self.stats.incr_steps();
     }
 
-    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<()> {
+    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<Vec<i64>> {
         let entry_point_addr = *self
             .globals
             .lookup(entry_point)
             .ok_or(anyhow!("entry point '{:?}' not found", entry_point))?;
         self.stack.push(entry_point_addr);
+        self.output.clear();
         loop {
             if self.stack.is_empty() {
-                return Ok(());
+                break;
             }
 
             if self.is_fully_reduce() {
@@ -501,7 +515,8 @@ impl Machine {
                 self.do_admin();
             };
         }
-        Ok(())
+        let output = mem::replace(&mut self.output, Vec::new());
+        Ok(output)
     }
 
     fn eval_step(&mut self) -> Result<()> {
@@ -770,6 +785,10 @@ impl Machine {
         }))
     }
 
+    fn impl_prim_print(&mut self, _arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
+        todo!()
+    }
+
     fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<()> {
         assert_eq!(self.stack.pop(), Some(node_addr));
         let arity = prim_node.0.get_arity();
@@ -824,6 +843,7 @@ impl Machine {
             PrimOp::MatchList => self.impl_prim_match_list(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
             PrimOp::Stop => Ok(PrimOpResult::Stop),
+            PrimOp::Print => self.impl_prim_print(arg_addrs),
             PrimOp::Abort => Err(anyhow!("user code called abort")),
         }?;
 

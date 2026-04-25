@@ -437,6 +437,8 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
             "trace x y = {} x y",
             PrimOpKind::Print.to_name().unwrap()
         )),
+        must_lex_and_parse_sc("traceList l = caseList l unit _traceListOnCons"),
+        must_lex_and_parse_sc("_traceListOnCons head tail = trace head (traceList tail)"),
     ]
 }
 

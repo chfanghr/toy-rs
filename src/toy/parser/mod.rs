@@ -41,7 +41,7 @@ pub fn prelude() -> Vec<SuperCombinator<Name>> {
         must_lex_and_parse_sc("i x = x"),
         must_lex_and_parse_sc("k x y = x"),
         must_lex_and_parse_sc("k1 x y = y"),
-        must_lex_and_parse_sc("s f g x y = f x (g y)"),
+        must_lex_and_parse_sc("s f g x = f x (g x)"),
         must_lex_and_parse_sc("fix f = letrec x = f x in x"),
     ]
 }

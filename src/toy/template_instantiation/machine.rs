@@ -1,4 +1,4 @@
-use std::cmp::max;
+use std::{cmp::max, mem::replace};
 
 use crate::parser::{
     ast, prelude, PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME,
@@ -249,19 +249,23 @@ pub struct Stats {
 }
 
 impl Stats {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             steps: 0,
             peak_heap_size: 0,
         }
     }
 
-    pub(super) fn incr_steps(&mut self) {
+    fn incr_steps(&mut self) {
         self.steps += 1;
     }
 
-    pub(super) fn update_heap_size(&mut self, s: usize) {
+    fn update_heap_size(&mut self, s: usize) {
         self.peak_heap_size = max(self.peak_heap_size, s)
+    }
+
+    fn reset(&mut self) {
+        _ = replace(self, Self::new());
     }
 
     pub fn steps(&self) -> usize {
@@ -368,6 +372,10 @@ impl Machine {
         &self.stats
     }
 
+    pub fn output(&self) -> &[i64] {
+        &self.output
+    }
+
     pub(super) fn alloc_node(&mut self, n: Node) -> Addr {
         self.heap.alloc(n)
     }
@@ -469,7 +477,7 @@ impl Machine {
         &self.globals
     }
 
-    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<&[i64]> {
+    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<()> {
         let entry_point_addr = *self
             .globals
             .lookup(entry_point)
@@ -479,7 +487,10 @@ impl Machine {
         self.current_stack_bottom = 0;
 
         self.dump.reset();
+
         self.output.clear();
+
+        self.stats.reset();
 
         self.stack.push(entry_point_addr);
 
@@ -504,7 +515,7 @@ impl Machine {
             }
         }
 
-        Ok(&self.output)
+        Ok(())
     }
 
     fn eval_step(&mut self) -> Result<()> {

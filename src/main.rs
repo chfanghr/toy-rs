@@ -68,11 +68,11 @@ fn try_main(cli: Cli) -> Result<()> {
     trace!("initial machine: {:#?}", machine);
 
     debug!("executing");
-    let output = machine.eval(&entry_point)?.to_vec();
+    machine.eval(&entry_point)?;
     debug!("done executing");
     trace!("final machine: {:#?}", machine);
 
-    println!("output: {:?}", output);
+    println!("output: {:?}", machine.output());
     println!("entry_node: {}", machine.inspect_global(&entry_point));
     println!("stats: {:?}", machine.stats());
 

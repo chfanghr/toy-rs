@@ -163,6 +163,7 @@ custom_derive! {
         Abort,
         Stop,
         Print,
+        Seq,
         Constr
     }
 }
@@ -184,6 +185,7 @@ impl PrimOpKind {
             PrimOpKind::Abort => Some("_prim_abort"),
             PrimOpKind::Stop => Some("_prim_stop"),
             PrimOpKind::Print => Some("_prim_print"),
+            PrimOpKind::Seq => Some("_prim_seq"),
             PrimOpKind::Constr => None,
         }
     }
@@ -217,6 +219,7 @@ pub enum PrimOp {
     Abort,
     Stop,
     Print,
+    Seq,
     Constr(ConstrPrimOp),
 }
 
@@ -237,6 +240,7 @@ impl PrimOp {
             PrimOpKind::Abort => Some(PrimOp::Abort),
             PrimOpKind::Stop => Some(PrimOp::Stop),
             PrimOpKind::Print => Some(PrimOp::Print),
+            PrimOpKind::Seq => Some(PrimOp::Seq),
             PrimOpKind::Constr => None,
         }
     }
@@ -257,6 +261,7 @@ impl PrimOp {
             PrimOp::Abort => PrimOpKind::Abort,
             PrimOp::Stop => PrimOpKind::Stop,
             PrimOp::Print => PrimOpKind::Print,
+            PrimOp::Seq => PrimOpKind::Seq,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -277,6 +282,7 @@ impl PrimOp {
             PrimOp::Abort => 0,
             PrimOp::Stop => 0,
             PrimOp::Print => 2,
+            PrimOp::Seq => 2,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -438,8 +444,13 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
             PrimOpKind::Print.to_name().unwrap()
         )),
         must_lex_and_parse_sc("traceId x = trace x x"),
-        must_lex_and_parse_sc("traceList l = caseList l unit _traceListOnCons"),
-        must_lex_and_parse_sc("_traceListOnCons head tail = trace head (traceList tail)"),
+        must_lex_and_parse_sc("traceList l = seq (_traceList l) l"),
+        must_lex_and_parse_sc("_traceList l = caseList l unit _traceListOnCons"),
+        must_lex_and_parse_sc("_traceListOnCons head tail = trace head (_traceList tail)"),
+        must_lex_and_parse_sc(format!(
+            "seq x y = {} x y",
+            PrimOpKind::Seq.to_name().unwrap()
+        )),
     ]
 }
 
@@ -799,6 +810,16 @@ impl Machine {
         Ok(PrimOpResult::Done(Node::Indirect(b.get_addr())))
     }
 
+    fn impl_prim_seq(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
+        let [a, b] = arg_addrs.try_into().unwrap();
+
+        Ok(if a.is_whnf() {
+            PrimOpResult::Done(Node::Indirect(b.get_addr()))
+        } else {
+            PrimOpResult::NeedFurtherEvaluate(a.get_addr())
+        })
+    }
+
     fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<()> {
         assert_eq!(self.stack.pop(), Some(node_addr));
         let arity = prim_node.0.get_arity();
@@ -855,6 +876,7 @@ impl Machine {
             PrimOp::Stop => Ok(PrimOpResult::Stop),
             PrimOp::Print => self.impl_prim_print(arg_addrs),
             PrimOp::Abort => Err(anyhow!("user code called abort")),
+            PrimOp::Seq => self.impl_prim_seq(arg_addrs),
         }?;
 
         match res {

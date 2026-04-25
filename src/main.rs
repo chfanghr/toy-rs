@@ -32,7 +32,7 @@ fn main() {
 
     stderrlog::new()
         .module(module_path!())
-        .verbosity(cli.verbose as usize)
+        .verbosity(2 + cli.verbose as usize)
         .timestamp(stderrlog::Timestamp::Millisecond)
         .init()
         .unwrap();
@@ -72,7 +72,7 @@ fn try_main(cli: Cli) -> Result<()> {
     debug!("done executing");
     trace!("final machine: {:#?}", machine);
 
-    info!("output: {:?}", machine.output());
+    println!("{:?}", machine.output());
     info!("entry_node: {}", machine.inspect_global(&entry_point));
     info!("stats: {:?}", machine.stats());
 

@@ -342,7 +342,7 @@ fn apply_boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::lexer;
 
     use super::*;

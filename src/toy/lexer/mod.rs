@@ -100,12 +100,16 @@ pub fn token_vec<'src>() -> impl Parser<'src, &'src str, Vec<Token>, extra::Err<
         .then_ignore(end())
 }
 
-#[test]
-fn test() {
-    println!(
-        "{:?}",
-        token_vec().parse(
-            "fix f = letrec x = f x in x; 
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test() {
+        println!(
+            "{:?}",
+            token_vec().parse(
+                "fix f = letrec x = f x in x; 
                  maybe d f m = 
                     case m of
                         [0] -> d;
@@ -127,6 +131,7 @@ fn test() {
                  main = let x = 1 + 1 + 0 / 1 * 2  in fix (k (i x));
                  neg = _prim_neg
                 "
+            )
         )
-    )
+    }
 }

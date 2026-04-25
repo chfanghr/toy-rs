@@ -1,22 +1,73 @@
-use std::{env::args, fs::read_to_string};
+use clap::Parser;
+use log::{debug, trace};
+use std::{error::Error, fs, io, path::PathBuf};
+use toy::parser::ast;
 
-const DEMO_PROGRAM: &'static str = "
-        main = fst (snd (head (cons (mkPair 1 (mkPair 2 3)) nil)))
-    ";
+#[derive(Parser, Debug)]
+struct Cli {
+    #[arg(short, long, value_name = "FILE")]
+    input: Option<PathBuf>,
 
-fn main() -> Result<(), String> {
-    let args = args().collect::<Vec<_>>();
-    let source_file_content = args
-        .get(1)
-        .map(|p| read_to_string(p).map_err(|err| err.to_string()))
-        .transpose()?;
-    let source_file_content = source_file_content
-        .as_ref()
-        .map_or(DEMO_PROGRAM, |c| c.as_str());
-    let p = toy::program_from_text(source_file_content)?;
+    #[arg(short, long, default_value_t=String::from("main"), value_name = "ENRTY_FUNCTION")]
+    entry: String,
+
+    #[arg(short, long, action = clap::ArgAction::Count, default_value_t=0)]
+    verbose: u8,
+}
+
+#[cfg(debug_assertions)]
+fn fallback_source() -> Box<dyn io::Read> {
+    Box::new("main = fst (snd (mkPair 0 (mkPair 1 panic)))".as_bytes())
+}
+
+#[cfg(not(debug_assertions))]
+fn fallback_source() -> Box<dyn io::Read> {
+    let b: Box<dyn io::Read> = Box::new(io::stdin());
+    b
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    let entry_point = ast::Name::new(cli.entry);
+
+    stderrlog::new()
+        .module(module_path!())
+        .verbosity(cli.verbose as usize)
+        .timestamp(stderrlog::Timestamp::Millisecond)
+        .init()?;
+
+    let input_reader: Box<dyn io::Read> = cli.input.map_or_else(
+        || Ok(fallback_source()),
+        |f| -> io::Result<Box<dyn io::Read>> {
+            debug!("reading source from: {}", f.to_string_lossy());
+            let f = fs::File::open(f)?;
+            let b: Box<dyn io::Read> = Box::new(f);
+            Ok(b)
+        },
+    )?;
+    let input_content = io::read_to_string(input_reader)?;
+
+    debug!("parsing");
+    let p = toy::program_from_text(input_content)?;
+    debug!("done parsing");
+    trace!("ast: {:#?}", p);
+
+    debug!("constructing template instantiation machine");
     let mut machine = toy::template_instantiation::Machine::new(p);
-    machine.eval(None)?;
-    eprintln!("{:#?}", machine);
-    println!("{:#?}", machine.peak_node().borrow());
+    debug!("done constructing template instantiation machine");
+    trace!("initial machine: {:#?}", machine);
+
+    debug!("executing");
+    machine.eval(&entry_point)?;
+    debug!("done executing");
+    trace!("final machine: {:#?}", machine);
+
+    {
+        let entry_addr = *machine.globals.lookup(&entry_point).unwrap();
+        let entry_addr = machine.follow_indirect(entry_addr);
+        let entry_node = machine.heap.access(entry_addr).unwrap().borrow();
+        println!("{:?}", entry_node)
+    }
+
     Ok(())
 }

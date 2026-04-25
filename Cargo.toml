@@ -14,6 +14,8 @@ clap = { version = "4.3.14", features = ["derive"] }
 custom_derive = "0.1.7"
 enum_derive = "0.1.7"
 itertools = "0.14.0"
+log = "0.4.29"
+stderrlog = "0.6.0"
 
 [lib]
 name = "toy"

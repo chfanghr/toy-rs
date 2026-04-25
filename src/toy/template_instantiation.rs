@@ -463,9 +463,7 @@ impl Machine {
         self.stats.incr_steps();
     }
 
-    pub fn eval(&mut self, entry_point: Option<&ast::Name>) -> Result<(), String> {
-        let fallback_entry_point = ast::Name::new("main");
-        let entry_point = entry_point.unwrap_or(&fallback_entry_point);
+    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<(), String> {
         let entry_point_addr = *self
             .globals
             .lookup(entry_point)
@@ -528,7 +526,7 @@ impl Machine {
         Ok(())
     }
 
-    fn follow_indirect(&self, a: Addr) -> Addr {
+    pub fn follow_indirect(&self, a: Addr) -> Addr {
         match self.heap.access(a).unwrap().borrow().deref() {
             Node::Indirect(a) => self.follow_indirect(*a),
             _ => a,

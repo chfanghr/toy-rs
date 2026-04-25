@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use std::{fs, io, path::PathBuf, process::exit};
 use toy::parser::ast;
 
@@ -72,9 +72,9 @@ fn try_main(cli: Cli) -> Result<()> {
     debug!("done executing");
     trace!("final machine: {:#?}", machine);
 
-    println!("output: {:?}", machine.output());
-    println!("entry_node: {}", machine.inspect_global(&entry_point));
-    println!("stats: {:?}", machine.stats());
+    info!("output: {:?}", machine.output());
+    info!("entry_node: {}", machine.inspect_global(&entry_point));
+    info!("stats: {:?}", machine.stats());
 
     Ok(())
 }

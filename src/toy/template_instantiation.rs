@@ -434,7 +434,7 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc(format!("unit = Pack{{{}, 0}}", UNIT_TAG)),
         must_lex_and_parse_sc(format!("stop = {}", PrimOpKind::Stop.to_name().unwrap())),
         must_lex_and_parse_sc(format!(
-            "print x y = {} x y",
+            "trace x y = {} x y",
             PrimOpKind::Print.to_name().unwrap()
         )),
     ]
@@ -658,10 +658,7 @@ impl Machine {
     }
 
     fn impl_prim_if_then_else(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
-        let [pred_addr, then_branch_addr, else_branch_addr] =
-            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-                anyhow!("if-then-else prim op expected 3 args, got {}", v.len())
-            })?;
+        let [pred_addr, then_branch_addr, else_branch_addr] = arg_addrs.try_into().unwrap();
 
         if !pred_addr.is_whnf() {
             return Ok(PrimOpResult::NeedFurtherEvaluate(pred_addr.get_addr()));
@@ -695,9 +692,7 @@ impl Machine {
     }
 
     fn impl_prim_match_pair(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
-        let [pair_addr, f_addr] = arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-            anyhow!("matchPair prim op expected 2 args, got {}", v.len())
-        })?;
+        let [pair_addr, f_addr] = arg_addrs.try_into().unwrap();
 
         if !pair_addr.is_whnf() {
             return Ok(PrimOpResult::NeedFurtherEvaluate(pair_addr.get_addr()));
@@ -737,10 +732,7 @@ impl Machine {
     }
 
     fn impl_prim_match_list(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
-        let [list_addr, on_nil_addr, on_cons_addr]: [PrimOpArgAddr; 3] =
-            arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-                anyhow!("matchList prim op expected 3 args, got {}", v.len())
-            })?;
+        let [list_addr, on_nil_addr, on_cons_addr] = arg_addrs.try_into().unwrap();
 
         if !list_addr.is_whnf() {
             return Ok(PrimOpResult::NeedFurtherEvaluate(list_addr.get_addr()));
@@ -785,8 +777,23 @@ impl Machine {
         }))
     }
 
-    fn impl_prim_print(&mut self, _arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
-        todo!()
+    fn impl_prim_print(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
+        let [a, b] = arg_addrs.try_into().unwrap();
+
+        if !a.is_whnf() {
+            return Ok(PrimOpResult::NeedFurtherEvaluate(a.get_addr()));
+        }
+
+        let n = match self.heap.access(a.get_addr()).unwrap().borrow().deref() {
+            Node::Num(n) => Ok(n.0),
+            Node::Data(_) => Err(anyhow!("cannot print a data node")),
+            // Node::
+            _ => unreachable!("BUG: first arg is not in whnf"),
+        }?;
+
+        self.output.push(n);
+
+        Ok(PrimOpResult::Done(Node::Indirect(b.get_addr())))
     }
 
     fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<()> {

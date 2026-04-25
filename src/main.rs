@@ -68,16 +68,16 @@ fn try_main(cli: Cli) -> Result<()> {
     trace!("initial machine: {:#?}", machine);
 
     debug!("executing");
-    machine.eval(&entry_point)?;
+    let output = machine.eval(&entry_point)?;
     debug!("done executing");
     trace!("final machine: {:#?}", machine);
 
-    {
-        let entry_addr = *machine.globals.lookup(&entry_point).unwrap();
-        let entry_addr = machine.follow_indirect(entry_addr);
-        let entry_node = machine.heap.access(entry_addr).unwrap().borrow();
-        println!("{:?}", entry_node)
-    }
+    println!("output: {:?}", output);
+
+    let entry_addr = *machine.globals.lookup(&entry_point).unwrap();
+    let entry_addr = machine.follow_indirect(entry_addr);
+    let entry_node = machine.heap.access(entry_addr).unwrap().borrow();
+    println!("entry_node: {:?}", entry_node);
 
     Ok(())
 }

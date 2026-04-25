@@ -46,6 +46,7 @@ impl<T> Stack<T> {
         self.height = 0;
     }
 
+    #[allow(dead_code)]
     pub(super) fn trim(&mut self) {
         let mut storage = Vec::new();
         mem::swap(&mut storage, &mut self.storage);

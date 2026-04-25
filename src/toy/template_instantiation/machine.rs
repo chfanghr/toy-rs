@@ -410,8 +410,6 @@ impl Machine {
     fn do_admin(&mut self) {
         self.stats.incr_steps();
         self.stats.update_heap_size(self.heap.size());
-        self.stack.trim();
-        self.dump.trim();
     }
 
     pub(super) fn peak_node(&self) -> (Addr, &Node) {

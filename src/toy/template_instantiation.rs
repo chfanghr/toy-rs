@@ -15,6 +15,8 @@ use crate::parser::{
     PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME, PRIM_SUB_NAME,
 };
 
+use anyhow::{anyhow, bail, Result};
+
 #[derive(Debug, Clone)]
 pub struct Stack<T>(pub LinkedList<T>);
 
@@ -374,6 +376,8 @@ pub const PAIR_TAG: u64 = 0;
 pub const NIL_TAG: u64 = 0;
 pub const CONS_TAG: u64 = 1;
 
+pub const UNIT_TAG: u64 = 0;
+
 fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
         must_lex_and_parse_sc(format!("neg = {}", PrimOpKind::Neg.to_name().unwrap())),
@@ -409,6 +413,7 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc("head l = caseList l panic k"),
         must_lex_and_parse_sc("tail l = caseList l panic k1"),
         must_lex_and_parse_sc(format!("panic = {}", PrimOpKind::Abort.to_name().unwrap())),
+        must_lex_and_parse_sc(format!("unit = Pack{{{}, 0}}", UNIT_TAG)),
     ]
 }
 
@@ -463,11 +468,11 @@ impl Machine {
         self.stats.incr_steps();
     }
 
-    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<(), String> {
+    pub fn eval(&mut self, entry_point: &ast::Name) -> Result<()> {
         let entry_point_addr = *self
             .globals
             .lookup(entry_point)
-            .ok_or(format!("entry point '{:?}' not found", entry_point))?;
+            .ok_or(anyhow!("entry point '{:?}' not found", entry_point))?;
         self.stack.push(entry_point_addr);
         loop {
             if self.is_fully_reduce() {
@@ -483,13 +488,13 @@ impl Machine {
         Ok(())
     }
 
-    fn eval_step(&mut self) -> Result<(), String> {
+    fn eval_step(&mut self) -> Result<()> {
         let addr = *self.stack.peak().unwrap(); // Guarded by isDone
         let node = self.heap.access(addr).unwrap().clone();
         self.dispatch(addr, node)
     }
 
-    fn dispatch(&mut self, node_addr: Addr, node: Rc<RefCell<Node>>) -> Result<(), String> {
+    fn dispatch(&mut self, node_addr: Addr, node: Rc<RefCell<Node>>) -> Result<()> {
         match *node.borrow() {
             Node::Num(ref num_node) => self.handle_num_node(node_addr, num_node),
             Node::Data(ref data_node) => self.handle_data_node(node_addr, data_node),
@@ -503,21 +508,21 @@ impl Machine {
         }
     }
 
-    fn handle_indirect_node(&mut self, _node_addr: Addr, addr: Addr) -> Result<(), String> {
+    fn handle_indirect_node(&mut self, _node_addr: Addr, addr: Addr) -> Result<()> {
         let _ = self.stack.pop();
         self.stack.push(addr);
         Ok(())
     }
 
-    fn handle_num_node(&mut self, _node_addr: Addr, _n: &IntegerNode) -> Result<(), String> {
-        Err("cannot apply to an integer".to_string())
+    fn handle_num_node(&mut self, _node_addr: Addr, _n: &IntegerNode) -> Result<()> {
+        bail!("cannot apply to an integer")
     }
 
-    fn handle_data_node(&mut self, _node_addr: Addr, _n: &DataNode) -> Result<(), String> {
-        Err("cannot apply to a data node".to_string())
+    fn handle_data_node(&mut self, _node_addr: Addr, _n: &DataNode) -> Result<()> {
+        bail!("cannot apply to a data node")
     }
 
-    fn handle_ap_node(&mut self, node_addr: Addr, n: &ApplicationNode) -> Result<(), String> {
+    fn handle_ap_node(&mut self, node_addr: Addr, n: &ApplicationNode) -> Result<()> {
         let r = self.follow_indirect(n.r);
         if r != n.r {
             self.replace_node_at(node_addr, Node::Ap(ApplicationNode { l: n.l, r: r }));
@@ -537,9 +542,9 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<PrimOpResult, String>
+    ) -> Result<PrimOpResult>
     where
-        F: Fn([i64; N]) -> Result<Node, String>,
+        F: Fn([i64; N]) -> Result<Node>,
     {
         let (to_be_evaluated, evaluated): (Vec<Addr>, Vec<Addr>) =
             arg_addrs.into_iter().partition_map(|addr| match addr {
@@ -556,13 +561,13 @@ impl Machine {
             .map(
                 |addr| match self.heap.access(addr).unwrap().borrow().deref() {
                     Node::Num(n) => Ok(n.0),
-                    n => Err(format!("expected integer node at {:?}, got {:?}", addr, n)),
+                    n => Err(anyhow!("expected integer node at {:?}, got {:?}", addr, n)),
                 },
             )
             .try_collect()?;
         let num_args_arr: [i64; N] = num_args
             .try_into()
-            .map_err(|v: Vec<i64>| format!("expected {} args, got {}", N, v.len()))?;
+            .map_err(|v: Vec<i64>| anyhow!("expected {} args, got {}", N, v.len()))?;
 
         let node = f(num_args_arr)?;
         Ok(PrimOpResult::Done(node))
@@ -572,9 +577,9 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<PrimOpResult, String>
+    ) -> Result<PrimOpResult>
     where
-        F: Fn([i64; N]) -> Result<i64, String>,
+        F: Fn([i64; N]) -> Result<i64>,
     {
         self.impl_prim_all_num_args(arg_addrs, |args| {
             f(args).map(|x| Node::Num(IntegerNode::new(x)))
@@ -585,9 +590,9 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
         f: F,
-    ) -> Result<PrimOpResult, String>
+    ) -> Result<PrimOpResult>
     where
-        F: Fn([i64; N]) -> Result<bool, String>,
+        F: Fn([i64; N]) -> Result<bool>,
     {
         self.impl_prim_all_num_args(arg_addrs, |args| {
             f(args).map(|b| {
@@ -601,15 +606,16 @@ impl Machine {
         &mut self,
         arg_addrs: Vec<PrimOpArgAddr>,
         constr_prim_op: &ConstrPrimOp,
-    ) -> Result<PrimOpResult, String> {
+    ) -> Result<PrimOpResult> {
         let arity = constr_prim_op.arity;
 
         let num_fields_got = arg_addrs.len();
         if num_fields_got != arity {
-            return Err(format!(
+            bail!(
                 "constructor expected {} fields, got {}",
-                arity, num_fields_got
-            ));
+                arity,
+                num_fields_got
+            );
         }
 
         let field_args = arg_addrs
@@ -620,13 +626,10 @@ impl Machine {
         Ok(PrimOpResult::Done(node))
     }
 
-    fn impl_prim_if_then_else(
-        &mut self,
-        arg_addrs: Vec<PrimOpArgAddr>,
-    ) -> Result<PrimOpResult, String> {
+    fn impl_prim_if_then_else(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
         let [pred_addr, then_branch_addr, else_branch_addr] =
             arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-                format!("if-then-else prim op expected 3 args, got {}", v.len())
+                anyhow!("if-then-else prim op expected 3 args, got {}", v.len())
             })?;
 
         if !pred_addr.is_whnf() {
@@ -642,15 +645,16 @@ impl Machine {
         {
             Node::Num(_) => {
                 // Otherwise it won't stop evaluating
-                Err("predicate expression evaluated to num".to_string())
+                Err(anyhow!("predicate expression evaluated to num"))
             }
             Node::Data(d) => {
                 let next_addr = match (d.tag, d.field_addrs.len()) {
                     (TRUE_TAG, 0) => Ok(then_branch_addr),
                     (FALSE_TAG, 0) => Ok(else_branch_addr),
-                    (tag, fields_len) => Err(format!(
+                    (tag, fields_len) => Err(anyhow!(
                         "predicate expression didn't evaluate to boolean, tag: {}, fields len: {}",
-                        tag, fields_len
+                        tag,
+                        fields_len
                     )),
                 }?;
                 Ok(PrimOpResult::Done(Node::Indirect(next_addr.get_addr())))
@@ -659,12 +663,9 @@ impl Machine {
         }
     }
 
-    fn impl_prim_match_pair(
-        &mut self,
-        arg_addrs: Vec<PrimOpArgAddr>,
-    ) -> Result<PrimOpResult, String> {
+    fn impl_prim_match_pair(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
         let [pair_addr, f_addr] = arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-            format!("matchPair prim op expected 2 args, got {}", v.len())
+            anyhow!("matchPair prim op expected 2 args, got {}", v.len())
         })?;
 
         if !pair_addr.is_whnf() {
@@ -680,16 +681,19 @@ impl Machine {
         {
             Node::Num(_) => {
                 // Otherwise it won't stop evaluating
-                Err("pair expression evaluated to num, while data is expected".to_string())
+                Err(anyhow!(
+                    "pair expression evaluated to num, while data is expected"
+                ))
             }
             Node::Data(d) => match (d.tag, d.field_addrs.len()) {
                 (PAIR_TAG, 2) => {
                     let [a_addr, b_addr] = d.field_addrs.clone().try_into().unwrap();
                     Ok((a_addr, b_addr))
                 }
-                (tag, fields_len) => Err(format!(
+                (tag, fields_len) => Err(anyhow!(
                     "unrecognized pair constructor, tag: {}, fields len: {}",
-                    tag, fields_len
+                    tag,
+                    fields_len
                 )),
             },
             _ => unreachable!("BUG: pair is not in whnf"),
@@ -701,13 +705,10 @@ impl Machine {
         Ok(PrimOpResult::Done(node))
     }
 
-    fn impl_prim_match_list(
-        &mut self,
-        arg_addrs: Vec<PrimOpArgAddr>,
-    ) -> Result<PrimOpResult, String> {
+    fn impl_prim_match_list(&mut self, arg_addrs: Vec<PrimOpArgAddr>) -> Result<PrimOpResult> {
         let [list_addr, on_nil_addr, on_cons_addr]: [PrimOpArgAddr; 3] =
             arg_addrs.try_into().map_err(|v: Vec<PrimOpArgAddr>| {
-                format!("matchList prim op expected 3 args, got {}", v.len())
+                anyhow!("matchList prim op expected 3 args, got {}", v.len())
             })?;
 
         if !list_addr.is_whnf() {
@@ -723,7 +724,9 @@ impl Machine {
         {
             Node::Num(_) => {
                 // Otherwise it won't stop evaluating
-                Err("list expression evaluated to num, while data is expected".to_string())
+                Err(anyhow!(
+                    "list expression evaluated to num, while data is expected"
+                ))
             }
             Node::Data(d) => match (d.tag, d.field_addrs.len()) {
                 (NIL_TAG, 0) => Ok(Either::Left(())),
@@ -731,9 +734,10 @@ impl Machine {
                     let [head_addr, tail_addr] = d.field_addrs.clone().try_into().unwrap();
                     Ok(Either::Right((head_addr, tail_addr)))
                 }
-                (tag, fields_len) => Err(format!(
+                (tag, fields_len) => Err(anyhow!(
                     "unrecognized list constructor, tag: {}, fields len: {}",
-                    tag, fields_len
+                    tag,
+                    fields_len
                 )),
             },
             _ => unreachable!("BUG: pair is not in whnf"),
@@ -750,17 +754,19 @@ impl Machine {
         }))
     }
 
-    fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<(), String> {
+    fn handle_prim_node(&mut self, node_addr: Addr, prim_node: &PrimNode) -> Result<()> {
         assert_eq!(self.stack.pop(), Some(node_addr));
         let arity = prim_node.0.get_arity();
         let ap_node_addrs = self.stack.pop_n_releaxed(arity);
         let num_popped = ap_node_addrs.len();
 
         if num_popped != arity {
-            Err(format!(
+            bail!(
                 "prim op {:?} expected {} args, got {}",
-                prim_node.0, arity, num_popped
-            ))?
+                prim_node.0,
+                arity,
+                num_popped
+            )
         }
 
         let node_addr_to_override = if arity == 0 {
@@ -789,7 +795,7 @@ impl Machine {
             PrimOp::Mul => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| Ok(x * y)),
             PrimOp::Div => self.impl_prim_all_num_args_ret_num(arg_addrs, |[x, y]| {
                 if y == 0 {
-                    Err("divide by zero".to_string())
+                    Err(anyhow!("divide by zero"))
                 } else {
                     Ok(x / y)
                 }
@@ -801,7 +807,7 @@ impl Machine {
             PrimOp::MatchPair => self.impl_prim_match_pair(arg_addrs),
             PrimOp::MatchList => self.impl_prim_match_list(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
-            PrimOp::Abort => Err("user code called abort".to_string()),
+            PrimOp::Abort => Err(anyhow!("user code called abort")),
         }?;
 
         match res {
@@ -832,16 +838,12 @@ impl Machine {
         self.stack = stack;
     }
 
-    fn handle_super_comb_node(
-        &mut self,
-        _node_addr: Addr,
-        n: &SuperCombinatorNode,
-    ) -> Result<(), String> {
+    fn handle_super_comb_node(&mut self, _node_addr: Addr, n: &SuperCombinatorNode) -> Result<()> {
         let super_comb_node_addr = self.stack.pop().unwrap(); // The ptr to the super combinator node
         let num_args = n.0.arguments.len();
         let ap_node_addrs = self.stack.pop_n_releaxed(num_args);
         if num_args != ap_node_addrs.len() {
-            Err(format!(
+            Err(anyhow!(
                 "super combinator {:?} expected {:} args, got {:}",
                 n,
                 num_args,
@@ -906,7 +908,7 @@ impl Machine {
         expr: &ast::Expr<ast::Name>,
         // To handle recursive let where we need to know the binder's addr before instatiating the respective expression.
         replace_at: Option<Addr>,
-    ) -> Result<Addr, String> {
+    ) -> Result<Addr> {
         match expr {
             ast::Expr::Num(n) => {
                 Ok(self.replace_or_alloc_node_at(replace_at, Node::Num(IntegerNode::new(n.0))))
@@ -922,7 +924,7 @@ impl Machine {
             ast::Expr::Var(v) => env
                 .lookup(v)
                 .copied()
-                .ok_or(format!("variable {:?} not found", v))
+                .ok_or(anyhow!("variable {:?} not found", v))
                 .map(|a| self.replace_or_alloc_node_at(replace_at, Node::Indirect(a))),
             ast::Expr::Let(l) => {
                 let preallocated_binders = l.is_recursive.then(|| {
@@ -951,7 +953,7 @@ impl Machine {
                         )?;
                         Ok((b.binder.clone(), addr))
                     })
-                    .collect::<Result<Vec<(ast::Name, Addr)>, String>>()?
+                    .collect::<Result<Vec<(ast::Name, Addr)>>>()?
                     .into_iter()
                     .fold(Assoc::new(), |mut a, (k, v)| {
                         a.insert(k, v);

@@ -1,6 +1,7 @@
+use anyhow::Result;
 use clap::Parser;
 use log::{debug, trace};
-use std::{error::Error, fs, io, path::PathBuf};
+use std::{fs, io, path::PathBuf};
 use toy::parser::ast;
 
 #[derive(Parser, Debug)]
@@ -26,7 +27,7 @@ fn fallback_source() -> Box<dyn io::Read> {
     b
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     let entry_point = ast::Name::new(cli.entry);
 

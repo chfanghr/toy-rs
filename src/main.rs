@@ -18,7 +18,7 @@ struct Cli {
 
 #[cfg(debug_assertions)]
 fn fallback_source() -> Box<dyn io::Read> {
-    Box::new("main = fst (snd (mkPair 0 (mkPair 1 panic)))".as_bytes())
+    Box::new("main = stop".as_bytes())
 }
 
 #[cfg(not(debug_assertions))]

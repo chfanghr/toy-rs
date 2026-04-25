@@ -56,6 +56,10 @@ impl<T> Stack<T> {
     pub fn push_vec(&mut self, v: Vec<T>) {
         v.into_iter().for_each(|x| self.push(x));
     }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +161,7 @@ custom_derive! {
         MatchPair,
         MatchList,
         Abort,
+        Stop,
         Constr
     }
 }
@@ -176,6 +181,7 @@ impl PrimOpKind {
             PrimOpKind::MatchPair => Some("_prim_match_pair"),
             PrimOpKind::MatchList => Some("_prim_match_list"),
             PrimOpKind::Abort => Some("_prim_abort"),
+            PrimOpKind::Stop => Some("_prim_stop"),
             PrimOpKind::Constr => None,
         }
     }
@@ -207,6 +213,7 @@ pub enum PrimOp {
     MatchPair,
     MatchList,
     Abort,
+    Stop,
     Constr(ConstrPrimOp),
 }
 
@@ -225,6 +232,7 @@ impl PrimOp {
             PrimOpKind::MatchPair => Some(PrimOp::MatchPair),
             PrimOpKind::MatchList => Some(PrimOp::MatchList),
             PrimOpKind::Abort => Some(PrimOp::Abort),
+            PrimOpKind::Stop => Some(PrimOp::Stop),
             PrimOpKind::Constr => None,
         }
     }
@@ -243,6 +251,7 @@ impl PrimOp {
             PrimOp::MatchPair => PrimOpKind::MatchPair,
             PrimOp::MatchList => PrimOpKind::MatchList,
             PrimOp::Abort => PrimOpKind::Abort,
+            PrimOp::Stop => PrimOpKind::Stop,
             PrimOp::Constr(_) => PrimOpKind::Constr,
         }
     }
@@ -261,6 +270,7 @@ impl PrimOp {
             PrimOp::MatchPair => 2,
             PrimOp::MatchList => 3,
             PrimOp::Abort => 0,
+            PrimOp::Stop => 0,
             PrimOp::Constr(c) => c.arity as usize,
         }
     }
@@ -270,6 +280,7 @@ impl PrimOp {
 enum PrimOpResult {
     NeedFurtherEvaluate(Addr),
     Done(Node),
+    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -414,6 +425,7 @@ fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc("tail l = caseList l panic k1"),
         must_lex_and_parse_sc(format!("panic = {}", PrimOpKind::Abort.to_name().unwrap())),
         must_lex_and_parse_sc(format!("unit = Pack{{{}, 0}}", UNIT_TAG)),
+        must_lex_and_parse_sc(format!("stop = {}", PrimOpKind::Stop.to_name().unwrap())),
     ]
 }
 
@@ -475,6 +487,10 @@ impl Machine {
             .ok_or(anyhow!("entry point '{:?}' not found", entry_point))?;
         self.stack.push(entry_point_addr);
         loop {
+            if self.stack.is_empty() {
+                return Ok(());
+            }
+
             if self.is_fully_reduce() {
                 if self.dump.is_empty() {
                     break;
@@ -807,6 +823,7 @@ impl Machine {
             PrimOp::MatchPair => self.impl_prim_match_pair(arg_addrs),
             PrimOp::MatchList => self.impl_prim_match_list(arg_addrs),
             PrimOp::IfThenElse => self.impl_prim_if_then_else(arg_addrs),
+            PrimOp::Stop => Ok(PrimOpResult::Stop),
             PrimOp::Abort => Err(anyhow!("user code called abort")),
         }?;
 
@@ -822,6 +839,7 @@ impl Machine {
                 self.replace_node_at(node_addr_to_override, node);
                 self.stack.push(node_addr_to_override);
             }
+            PrimOpResult::Stop => self.stack.clear(),
         };
 
         Ok(())

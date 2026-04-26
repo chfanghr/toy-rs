@@ -109,20 +109,9 @@ impl<T> Stack<T> {
         assert!(self.height >= n);
         self.height -= n
     }
-}
 
-impl<T> Into<Vec<T>> for Stack<T> {
-    fn into(self) -> Vec<T> {
-        self.storage.into_iter().take(self.height).collect()
-    }
-}
-
-impl<T> From<Vec<T>> for Stack<T> {
-    fn from(v: Vec<T>) -> Self {
-        Self {
-            height: v.len(),
-            storage: v,
-        }
+    pub(super) fn all_available(&self) -> impl Iterator<Item = &T> {
+        self.storage.iter()
     }
 }
 

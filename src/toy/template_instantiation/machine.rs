@@ -1,4 +1,4 @@
-use std::{cmp::max, mem::replace};
+use std::{cmp::max, collections::LinkedList, mem::replace};
 
 use crate::parser::{
     ast, prelude, PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME,
@@ -7,7 +7,6 @@ use crate::parser::{
 
 use super::{assoc::Assoc, heap::Addr, heap::Heap, prelude::extended_prelude, stack::Stack};
 use anyhow::{anyhow, Result};
-use itertools::Itertools;
 use log::{debug, trace};
 
 #[derive(Debug, Clone)]
@@ -39,7 +38,11 @@ impl HeapNode {
         self.marked = true;
     }
 
-    fn is_marked(&mut self) -> bool {
+    fn update_node(&mut self, node: Node) {
+        self.node = Some(node)
+    }
+
+    fn is_marked(&self) -> bool {
         self.marked
     }
 
@@ -467,7 +470,7 @@ impl Machine {
         self.output.push(i);
     }
 
-    const GC_THRESHOLD: usize = 8192;
+    const GC_THRESHOLD: usize = 4096;
 
     fn do_admin(&mut self) {
         self.stats.incr_steps();
@@ -476,13 +479,10 @@ impl Machine {
         if pre_gc_heap_size > Self::GC_THRESHOLD {
             self.stack.trim();
             self.dump.trim();
-            debug!("gc triggered");
+            debug!("gc triggered, heap size: {}", pre_gc_heap_size);
             self.gc();
             let post_gc_heap_size = self.heap.size();
-            debug!(
-                "done gc, heap size pre gc: {}, post gc: {}",
-                pre_gc_heap_size, post_gc_heap_size
-            );
+            debug!("done gc, heap size: {}", post_gc_heap_size);
         }
     }
 
@@ -493,15 +493,70 @@ impl Machine {
     }
 
     fn get_gc_roots(&self) -> Vec<Addr> {
-        let roots_from_stack: Vec<_> = self.stack.clone().into();
-        let roots_from_stack = roots_from_stack.into_iter();
-        let roots_from_globals = self.globals.values().copied();
+        let roots_from_stack = self.stack.all_available();
+        let roots_from_globals = self.globals.values();
 
-        roots_from_globals.chain(roots_from_stack).collect()
+        roots_from_globals
+            .chain(roots_from_stack)
+            .copied()
+            .collect()
     }
 
     fn mark_nodes_from(&mut self, addr: Addr) {
-        todo!()
+        let mut to_visit = LinkedList::<Addr>::new();
+        to_visit.push_back(addr);
+
+        while let Some(addr) = to_visit.pop_front() {
+            let heap_node = self.heap.access(addr).unwrap();
+
+            if heap_node.is_marked() {
+                continue;
+            }
+
+            let node = heap_node
+                .get_node()
+                .expect("BUG: encountered uninitialized node");
+
+            let (new_node, more_to_visit, should_mark): (Option<Node>, Vec<Addr>, bool) = match node
+            {
+                Node::Ap(n) => {
+                    let l = self.follow_indirect(n.l_addr());
+                    let r = self.follow_indirect(n.r_addr());
+                    (Some(Node::Ap(ApplicationNode::new(l, r))), vec![l, r], true)
+                }
+                Node::SuperComb(_) => (None, Vec::new(), true),
+                Node::Num(_) => (None, Vec::new(), true),
+                Node::Prim(_) => (None, Vec::new(), true),
+                Node::Data(d) => {
+                    let field_addrs = d
+                        .field_addrs()
+                        .iter()
+                        .map(|a| self.follow_indirect(*a))
+                        .collect::<Vec<_>>();
+                    (
+                        Some(Node::Data(DataNode::new(d.tag(), field_addrs.clone()))),
+                        field_addrs,
+                        true,
+                    )
+                }
+                Node::Indirect(addr) => (None, vec![self.follow_indirect(*addr)], false),
+            };
+
+            let heap_node = self.heap.access_mut(addr).unwrap();
+
+            if should_mark {
+                heap_node.mark();
+            }
+
+            to_visit.extend(more_to_visit);
+
+            if let Some(node) = new_node {
+                heap_node.update_node(node);
+            }
+        }
+
+        // Always mark the root
+        self.heap.access_mut(addr).unwrap().mark();
     }
 
     fn sweep_nodes(&mut self) {

@@ -89,5 +89,6 @@ mod tests {
 
         let addr_3 = heap.alloc(42);
         assert_eq!(addr_3, addr_2);
+        assert_eq!(heap.access(addr_3).copied(), Some(42))
     }
 }

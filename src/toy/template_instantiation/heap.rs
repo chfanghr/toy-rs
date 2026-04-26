@@ -17,10 +17,10 @@ impl<T> Heap<T> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(super) fn addresses<'a>(&'a self) -> impl Iterator<Item = Addr> + 'a {
+    pub(super) fn addresses(&self) -> impl Iterator<Item = Addr> {
+        let holes = self.holes.clone();
         (0..self.storage.len())
-            .filter(|x| !self.holes.contains(*x))
+            .filter(move |x| !holes.contains(*x))
             .map(Addr)
     }
 
@@ -38,7 +38,6 @@ impl<T> Heap<T> {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn free(&mut self, addr: Addr) {
         self.holes.insert(addr.0);
     }

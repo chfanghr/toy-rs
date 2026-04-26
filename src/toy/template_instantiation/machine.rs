@@ -7,7 +7,45 @@ use crate::parser::{
 
 use super::{assoc::Assoc, heap::Addr, heap::Heap, prelude::extended_prelude, stack::Stack};
 use anyhow::{anyhow, Result};
-use log::trace;
+use log::{debug, trace};
+
+#[derive(Debug, Clone)]
+pub(super) struct HeapNode {
+    marked: bool,
+    node: Option<Node>,
+}
+
+impl HeapNode {
+    fn new(node: Node) -> Self {
+        Self {
+            marked: false,
+            node: Some(node),
+        }
+    }
+
+    fn new_uninitialized() -> Self {
+        Self {
+            marked: false,
+            node: None,
+        }
+    }
+
+    fn unmark(&mut self) {
+        self.marked = false;
+    }
+
+    fn mark(&mut self) {
+        self.marked = true;
+    }
+
+    fn is_marked(&mut self) -> bool {
+        self.marked
+    }
+
+    fn get_node(&self) -> Option<&Node> {
+        self.node.as_ref()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) enum Node {
@@ -17,7 +55,6 @@ pub(super) enum Node {
     Prim(PrimNode),
     Data(DataNode),
     Indirect(Addr),
-    Dummy,
 }
 
 impl Node {
@@ -311,7 +348,7 @@ pub struct Machine {
     stack: Stack<Addr>,
     current_stack_bottom: usize,
     dump: Stack<usize>, // (current height, bottom)
-    heap: Heap<Node>,
+    heap: Heap<HeapNode>,
     globals: Assoc<ast::Name, Addr>,
     stats: Stats,
     output: Vec<i64>,
@@ -319,7 +356,7 @@ pub struct Machine {
 
 fn build_initial_heap(
     scs: Vec<ast::SuperCombinator<ast::Name>>,
-) -> (Heap<Node>, Assoc<ast::Name, Addr>) {
+) -> (Heap<HeapNode>, Assoc<ast::Name, Addr>) {
     PrimOpKind::iter_variants()
         .filter_map(|op| {
             Some((
@@ -342,7 +379,7 @@ fn build_initial_heap(
         .fold(
             (Heap::new(), Assoc::new()),
             |(mut heap, mut globals), (name, node)| {
-                let addr = heap.alloc(node);
+                let addr = heap.alloc(HeapNode::new(node));
                 globals.insert(name, addr);
                 (heap, globals)
             },
@@ -377,7 +414,11 @@ impl Machine {
     }
 
     pub(super) fn alloc_node(&mut self, n: Node) -> Addr {
-        self.heap.alloc(n)
+        self.heap.alloc(HeapNode::new(n))
+    }
+
+    pub(super) fn alloc_uninitialized_node(&mut self) -> Addr {
+        self.heap.alloc(HeapNode::new_uninitialized())
     }
 
     pub(super) fn replace_or_alloc_node_at(
@@ -396,28 +437,77 @@ impl Machine {
     }
 
     pub(super) fn follow_indirect(&self, a: Addr) -> Addr {
-        match self.heap.access(a).unwrap() {
+        match self
+            .heap
+            .access(a)
+            .unwrap()
+            .get_node()
+            .expect("BUG: encountered uninitialized node")
+        {
             Node::Indirect(a) => self.follow_indirect(*a),
             _ => a,
         }
     }
 
     pub(super) fn replace_node_at(&mut self, a: Addr, n: Node) {
-        *self.heap.access_mut(a).unwrap() = n;
+        *self.heap.access_mut(a).unwrap() = HeapNode::new(n);
     }
 
     pub(super) fn must_get_node(&self, a: Addr) -> &Node {
         let addr = self.follow_indirect(a);
-        self.heap.access(addr).unwrap()
+        self.heap
+            .access(addr)
+            .unwrap()
+            .get_node()
+            .expect("BUG: encountered uninitialized node")
     }
 
     pub(super) fn push_output(&mut self, i: i64) {
         self.output.push(i);
     }
 
+    const GC_THRESHOLD: usize = 8192;
+
     fn do_admin(&mut self) {
         self.stats.incr_steps();
-        self.stats.update_heap_size(self.heap.size());
+        let pre_gc_heap_size = self.heap.size();
+        self.stats.update_heap_size(pre_gc_heap_size);
+        if pre_gc_heap_size > Self::GC_THRESHOLD {
+            self.stack.trim();
+            self.dump.trim();
+            debug!("gc triggered");
+            self.gc();
+            let post_gc_heap_size = self.heap.size();
+            debug!(
+                "done gc, heap size pre gc: {}, post gc: {}",
+                pre_gc_heap_size, post_gc_heap_size
+            );
+        }
+    }
+
+    fn gc(&mut self) {
+        let roots = self.get_gc_roots();
+        roots.into_iter().for_each(|a| self.mark_nodes_from(a));
+        self.sweep_nodes();
+    }
+
+    fn get_gc_roots(&self) -> Vec<Addr> {
+        self.stack.clone().into()
+    }
+
+    fn mark_nodes_from(&mut self, addr: Addr) {
+        todo!()
+    }
+
+    fn sweep_nodes(&mut self) {
+        self.heap.addresses().for_each(|addr| {
+            let node = self.heap.access_mut(addr).unwrap();
+            if node.is_marked() {
+                node.unmark();
+            } else {
+                self.heap.free(addr);
+            }
+        });
     }
 
     pub(super) fn peak_node(&self) -> (Addr, &Node) {

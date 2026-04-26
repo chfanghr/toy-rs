@@ -14,7 +14,6 @@ impl Machine {
             }
             Node::Prim(prim_node) => self.handle_prim_node(node_addr, prim_node),
             Node::Indirect(addr) => self.handle_indirect_node(node_addr, addr),
-            Node::Dummy => panic!("BUG: incomplete template instantiation results in dummy node"),
         }
     }
 
@@ -108,7 +107,7 @@ impl Machine {
                 let preallocated_binders = l.is_recursive.then(|| {
                     l.definitions
                         .iter()
-                        .map(|b| (b.binder.clone(), self.alloc_node(Node::Dummy)))
+                        .map(|b| (b.binder.clone(), self.alloc_uninitialized_node()))
                         .fold(Assoc::new(), |mut a, (k, v)| {
                             a.insert(k, v);
                             a

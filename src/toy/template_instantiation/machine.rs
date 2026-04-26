@@ -7,6 +7,7 @@ use crate::parser::{
 
 use super::{assoc::Assoc, heap::Addr, heap::Heap, prelude::extended_prelude, stack::Stack};
 use anyhow::{anyhow, Result};
+use itertools::Itertools;
 use log::{debug, trace};
 
 #[derive(Debug, Clone)]
@@ -492,7 +493,11 @@ impl Machine {
     }
 
     fn get_gc_roots(&self) -> Vec<Addr> {
-        self.stack.clone().into()
+        let roots_from_stack: Vec<_> = self.stack.clone().into();
+        let roots_from_stack = roots_from_stack.into_iter();
+        let roots_from_globals = self.globals.values().copied();
+
+        roots_from_globals.chain(roots_from_stack).collect()
     }
 
     fn mark_nodes_from(&mut self, addr: Addr) {

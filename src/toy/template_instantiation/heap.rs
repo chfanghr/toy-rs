@@ -28,6 +28,7 @@ impl<T> Heap<T> {
         match self.holes.iter().next() {
             Some(addr) => {
                 self.storage[addr] = e;
+                self.holes.remove(addr);
                 Addr(addr)
             }
             None => {

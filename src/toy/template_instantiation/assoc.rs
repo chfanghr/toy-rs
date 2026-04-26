@@ -20,6 +20,16 @@ impl<K: Ord, V> Assoc<K, V> {
     pub(super) fn combine(l: Assoc<K, V>, r: Assoc<K, V>) -> Assoc<K, V> {
         Assoc(r.0.into_iter().chain(l.0).collect())
     }
+
+    pub(super) fn values(&self) -> impl Iterator<Item = &V> {
+        self.0
+            .iter()
+            .rev()
+            .flat_map(|m| m.iter())
+            .collect::<BTreeMap<&K, &V>>()
+            .into_iter()
+            .map(|(_, v)| v)
+    }
 }
 
 #[cfg(test)]

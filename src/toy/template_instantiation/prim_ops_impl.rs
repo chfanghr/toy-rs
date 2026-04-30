@@ -1,4 +1,5 @@
-use super::{machine::*, prelude::*, Addr};
+use super::{machine::*, prelude::*};
+use crate::utils::heap::Addr;
 use anyhow::{anyhow, bail, Context, Result};
 use itertools::{Either, Itertools};
 

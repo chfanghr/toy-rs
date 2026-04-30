@@ -1,6 +1,7 @@
 pub mod lexer;
 pub mod parser;
 pub mod template_instantiation;
+pub mod utils;
 
 #[macro_use]
 extern crate custom_derive;

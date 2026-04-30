@@ -1,27 +1,27 @@
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
-pub(super) struct Assoc<K, V>(Vec<BTreeMap<K, V>>);
+pub struct Assoc<K, V>(Vec<BTreeMap<K, V>>);
 
 impl<K: Ord, V> Assoc<K, V> {
-    pub(super) fn new() -> Assoc<K, V> {
+    pub fn new() -> Assoc<K, V> {
         Assoc(vec![BTreeMap::new()])
     }
 
-    pub(super) fn insert(&mut self, k: K, v: V) {
+    pub fn insert(&mut self, k: K, v: V) {
         let _ = self.0.first_mut().unwrap().insert(k, v);
     }
 
-    pub(super) fn lookup(&self, k: &K) -> Option<&V> {
+    pub fn lookup(&self, k: &K) -> Option<&V> {
         self.0.iter().find_map(|b| b.get(k))
     }
 
     // Right-bias
-    pub(super) fn combine(l: Assoc<K, V>, r: Assoc<K, V>) -> Assoc<K, V> {
+    pub fn combine(l: Assoc<K, V>, r: Assoc<K, V>) -> Assoc<K, V> {
         Assoc(r.0.into_iter().chain(l.0).collect())
     }
 
-    pub(super) fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn values(&self) -> impl Iterator<Item = &V> {
         self.0
             .iter()
             .rev()
@@ -34,7 +34,7 @@ impl<K: Ord, V> Assoc<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::template_instantiation::assoc::Assoc;
+    use super::*;
 
     #[test]
     fn test() {

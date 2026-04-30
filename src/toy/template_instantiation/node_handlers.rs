@@ -1,7 +1,7 @@
+use super::machine::*;
 use crate::parser::ast;
+use crate::utils::{assoc::Assoc, heap::Addr};
 use anyhow::{anyhow, bail, Result};
-
-use super::{assoc::Assoc, machine::*, Addr};
 
 impl Machine {
     pub(super) fn dispatch_node(&mut self, node_addr: Addr, node: Node) -> Result<()> {

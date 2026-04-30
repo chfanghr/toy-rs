@@ -4,27 +4,27 @@ use bit_set::BitSet;
 pub struct Addr(usize);
 
 #[derive(Debug, Clone)]
-pub(super) struct Heap<T> {
+pub struct Heap<T> {
     storage: Vec<T>,
     holes: BitSet,
 }
 
 impl<T> Heap<T> {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             storage: Vec::new(),
             holes: BitSet::new(),
         }
     }
 
-    pub(super) fn addresses(&self) -> impl Iterator<Item = Addr> {
+    pub fn addresses(&self) -> impl Iterator<Item = Addr> {
         let holes = self.holes.clone();
         (0..self.storage.len())
             .filter(move |x| !holes.contains(*x))
             .map(Addr)
     }
 
-    pub(super) fn alloc(&mut self, e: T) -> Addr {
+    pub fn alloc(&mut self, e: T) -> Addr {
         match self.holes.iter().next() {
             Some(addr) => {
                 self.storage[addr] = e;
@@ -39,11 +39,11 @@ impl<T> Heap<T> {
         }
     }
 
-    pub(super) fn free(&mut self, addr: Addr) {
+    pub fn free(&mut self, addr: Addr) {
         self.holes.insert(addr.0);
     }
 
-    pub(super) fn access(&self, addr: Addr) -> Option<&T> {
+    pub fn access(&self, addr: Addr) -> Option<&T> {
         if addr.0 >= self.storage.len() || self.holes.contains(addr.0) {
             None
         } else {
@@ -51,7 +51,7 @@ impl<T> Heap<T> {
         }
     }
 
-    pub(super) fn access_mut(&mut self, addr: Addr) -> Option<&mut T> {
+    pub fn access_mut(&mut self, addr: Addr) -> Option<&mut T> {
         if addr.0 >= self.storage.len() || self.holes.contains(addr.0) {
             None
         } else {
@@ -59,7 +59,7 @@ impl<T> Heap<T> {
         }
     }
 
-    pub(super) fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.storage.len() - self.holes.count()
     }
 }

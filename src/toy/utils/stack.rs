@@ -1,37 +1,37 @@
 use std::{cmp::min, mem};
 
 #[derive(Debug, Clone)]
-pub(super) struct Stack<T> {
+pub struct Stack<T> {
     storage: Vec<T>,
     height: usize,
 }
 
 impl<T> Stack<T> {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             storage: Vec::new(),
             height: 0,
         }
     }
 
-    pub(super) fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.height
     }
 
-    pub(super) fn available(&self) -> usize {
+    pub fn available(&self) -> usize {
         self.storage.len()
     }
 
-    pub(super) fn set_height(&mut self, height: usize) {
+    pub fn set_height(&mut self, height: usize) {
         assert!(self.available() >= height);
         self.height = height
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.height == 0
     }
 
-    pub(super) fn push(&mut self, e: T) {
+    pub fn push(&mut self, e: T) {
         let height = self.height;
         if height >= self.storage.len() {
             self.storage.push(e);
@@ -41,20 +41,19 @@ impl<T> Stack<T> {
         self.height += 1;
     }
 
-    pub(super) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.storage.clear();
         self.height = 0;
     }
 
-    #[allow(dead_code)]
-    pub(super) fn trim(&mut self) {
+    pub fn trim(&mut self) {
         let mut storage = Vec::new();
         mem::swap(&mut storage, &mut self.storage);
         let storage = storage.into_iter().take(self.height).collect();
         self.storage = storage
     }
 
-    pub(super) fn pop(&mut self) -> Option<&T> {
+    pub fn pop(&mut self) -> Option<&T> {
         if self.is_empty() {
             None
         } else {
@@ -63,14 +62,14 @@ impl<T> Stack<T> {
         }
     }
 
-    pub(super) fn pop_cloned(&mut self) -> Option<T>
+    pub fn pop_cloned(&mut self) -> Option<T>
     where
         T: Clone,
     {
         self.pop().into_iter().cloned().next()
     }
 
-    pub(super) fn pop_n(&mut self, n: usize) -> Vec<&T> {
+    pub fn pop_n(&mut self, n: usize) -> Vec<&T> {
         let n = min(n, self.height);
         self.decrease_height_by(n);
         // FIXME: use slice
@@ -82,14 +81,14 @@ impl<T> Stack<T> {
             .collect()
     }
 
-    pub(super) fn pop_n_cloned(&mut self, n: usize) -> Vec<T>
+    pub fn pop_n_cloned(&mut self, n: usize) -> Vec<T>
     where
         T: Clone,
     {
         self.pop_n(n).into_iter().cloned().collect()
     }
 
-    pub(super) fn peak(&self) -> Option<&T> {
+    pub fn peak(&self) -> Option<&T> {
         if self.height == 0 {
             None
         } else {
@@ -97,8 +96,7 @@ impl<T> Stack<T> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(super) fn peak_cloned(&self) -> Option<T>
+    pub fn peak_cloned(&self) -> Option<T>
     where
         T: Clone,
     {
@@ -110,7 +108,7 @@ impl<T> Stack<T> {
         self.height -= n
     }
 
-    pub(super) fn all_available(&self) -> impl Iterator<Item = &T> {
+    pub fn all_available(&self) -> impl Iterator<Item = &T> {
         self.storage.iter()
     }
 }

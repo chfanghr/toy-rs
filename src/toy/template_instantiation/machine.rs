@@ -1,13 +1,14 @@
-use std::{cmp::max, collections::LinkedList, mem::replace};
-
-use crate::parser::{
-    ast, prelude, PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME,
-    PRIM_MUL_NAME, PRIM_SUB_NAME,
+use super::prelude::extended_prelude;
+use crate::{
+    parser::{
+        ast, prelude, PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME,
+        PRIM_MUL_NAME, PRIM_SUB_NAME,
+    },
+    utils::{assoc::Assoc, heap::Addr, heap::Heap, stack::Stack},
 };
-
-use super::{assoc::Assoc, heap::Addr, heap::Heap, prelude::extended_prelude, stack::Stack};
 use anyhow::{anyhow, Result};
 use log::{debug, trace};
+use std::{cmp::max, collections::LinkedList, mem::replace};
 
 #[derive(Debug, Clone)]
 pub(super) struct HeapNode {

@@ -103,6 +103,22 @@ impl<T> Stack<T> {
         self.peak().cloned()
     }
 
+    pub fn peak_nth_from_top(&self, n: usize) -> Option<&T> {
+        if self.height >= 1 + n {
+            let idx = self.height - 1 - n;
+            Some(self.storage.get(idx).unwrap())
+        } else {
+            None
+        }
+    }
+
+    pub fn peak_nth_from_top_cloned(&self, n: usize) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.peak_nth_from_top(n).cloned()
+    }
+
     fn decrease_height_by(&mut self, n: usize) {
         assert!(self.height >= n);
         self.height -= n
@@ -125,7 +141,11 @@ mod tests {
         stack.push(3);
         stack.push(4);
         let stack_height = stack.height();
+        assert_eq!(stack.peak_nth_from_top_cloned(0), Some(4));
+        assert_eq!(stack.peak_nth_from_top_cloned(1), Some(3));
         assert_eq!(stack.pop_cloned(), Some(4));
+        assert_eq!(stack.peak_nth_from_top_cloned(0), Some(3));
+        assert_eq!(stack.peak_nth_from_top_cloned(1), Some(2));
         assert_eq!(stack.peak_cloned(), Some(3));
         assert_eq!(stack.pop_n_cloned(69), vec![3, 2, 1]);
         stack.set_height(stack_height);

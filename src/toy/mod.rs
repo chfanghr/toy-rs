@@ -1,3 +1,4 @@
+pub mod g_machine;
 pub mod lexer;
 pub mod parser;
 pub mod template_instantiation;

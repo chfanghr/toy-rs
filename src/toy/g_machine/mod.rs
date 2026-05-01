@@ -218,6 +218,7 @@ impl Machine {
 
     fn handle_update(&mut self, n: usize) -> Result<InstrPtrNext> {
         let root_addr = self.stack.pop_cloned().expect("BUG: stack is empty");
+        let root_addr = self.follow_indirect(root_addr);
         let node_to_update_addr = self.stack.peak_nth_from_top_cloned(n).ok_or(anyhow!(
             "not enough args: expected {}, but only {} available on the stack",
             n,
@@ -309,6 +310,14 @@ impl Machine {
 
     fn replace_node_at(&mut self, a: Addr, node: Node) {
         *self.must_access_node_mut(a) = node;
+    }
+
+    fn follow_indirect(&mut self, a: Addr) -> Addr {
+        let mut next = a;
+        while let Node::Indirect(a) = self.must_access_node(next) {
+            next = *a
+        }
+        next
     }
 
     pub fn history(self) -> MachineHistoryIter {

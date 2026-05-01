@@ -1,6 +1,6 @@
 use std::{collections::LinkedList, mem, rc::Rc};
 
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, bail, Context, Ok, Result};
 use derive_getters::Getters;
 use intmap::IntMap;
 use itertools::Itertools;
@@ -24,7 +24,8 @@ enum Instruction {
     PushNum(i64),
     Push(usize),
     MkAp,
-    Slide(usize),
+    Update(usize),
+    Pop(usize),
 }
 
 type Code = Vec<Instruction>;
@@ -34,6 +35,7 @@ enum Node {
     Num(i64),
     Ap(Addr, Addr),
     Global(usize, Rc<Code>),
+    Indirect(Addr),
 }
 
 #[derive(Debug, Clone, Getters)]
@@ -89,11 +91,11 @@ impl Iterator for MachineHistoryIter {
             MachineHistoryIter::Machine(machine) => {
                 let res = machine.clone();
 
-                if let Err(err) = machine.step() {
-                    *self = Self::ErrOccurred(err);
-                } else if machine.is_done() {
+                if machine.is_done() {
                     *self = Self::Done
-                }
+                } else if let Err(err) = machine.step() {
+                    *self = Self::ErrOccurred(err);
+                };
 
                 Some(Ok(res))
             }
@@ -169,7 +171,8 @@ impl Machine {
             Instruction::PushNum(i) => self.handle_push_num(*i).context("PushNum"),
             Instruction::Push(n) => self.handle_push(*n).context("Push"),
             Instruction::MkAp => self.handle_mk_ap().context("MkAp"),
-            Instruction::Slide(n) => self.handle_slide(*n).context("Slide"),
+            Instruction::Update(n) => self.handle_update(*n).context("Update"),
+            Instruction::Pop(n) => self.handle_pop(*n).context("Pop"),
         }
     }
 
@@ -213,18 +216,29 @@ impl Machine {
         Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_slide(&mut self, n: usize) -> Result<InstrPtrNext> {
-        let root = self
-            .stack
-            .pop()
-            .copied()
-            .expect("COMPILER BUG: root ptr missing");
-        assert_eq!(
-            self.stack.pop_n(n).len(),
+    fn handle_update(&mut self, n: usize) -> Result<InstrPtrNext> {
+        let root_addr = self.stack.pop_cloned().expect("BUG: stack is empty");
+        let node_to_update_addr = self.stack.peak_nth_from_top_cloned(n).ok_or(anyhow!(
+            "not enough args: expected {}, but only {} available on the stack",
             n,
-            "COMPILER BUG: not enough args, should have been caught when executing Push"
-        );
-        self.stack.push(root);
+            self.stack.height()
+        ))?;
+
+        if node_to_update_addr == root_addr {
+            bail!("infinite loop: {:?}", root_addr)
+        }
+
+        self.replace_node_at(node_to_update_addr, Node::Indirect(root_addr));
+
+        Ok(InstrPtrNext::Advance)
+    }
+
+    fn handle_pop(&mut self, n: usize) -> Result<InstrPtrNext> {
+        if n != 0 {
+            let n_popped = self.stack.pop_n(n).len();
+            assert_eq!(n_popped, n, "COMPILER BUG: not enough args: expected {}, got {}. This should have been caught by Update", n, n_popped)
+        }
+
         Ok(InstrPtrNext::Advance)
     }
 
@@ -243,6 +257,12 @@ impl Machine {
             }
             Node::Global(_, code) => {
                 self.load_code(code.clone());
+                InstrPtrNext::Stay
+            }
+            Node::Indirect(addr) => {
+                let addr = *addr;
+                self.stack.pop().unwrap();
+                self.stack.push(addr);
                 InstrPtrNext::Stay
             }
         })
@@ -265,6 +285,10 @@ impl Machine {
         self.heap.access(addr).unwrap()
     }
 
+    fn must_access_node_mut(&mut self, addr: Addr) -> &mut Node {
+        self.heap.access_mut(addr).unwrap()
+    }
+
     fn lookup_global(&self, name: &ast::Name) -> Result<Addr> {
         self.globals
             .lookup(name)
@@ -281,6 +305,10 @@ impl Machine {
                 addr
             }
         }
+    }
+
+    fn replace_node_at(&mut self, a: Addr, node: Node) {
+        *self.must_access_node_mut(a) = node;
     }
 
     pub fn history(self) -> MachineHistoryIter {
@@ -381,7 +409,8 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result
         }
     }
 
-    code.push(Instruction::Slide(env.size() + 1));
+    code.push(Instruction::Update(env.size()));
+    code.push(Instruction::Pop(env.size()));
     code.push(Instruction::Unwind);
 
     Ok(code)
@@ -400,7 +429,14 @@ mod test_machine {
         let mut machine = Machine::new(compiled_program).unwrap();
         machine.setup_to_run(ast::Name::new("main"));
         let h = machine.history();
-        let machine_end = h.last().unwrap().unwrap();
+        let machine_end = h
+            .map(|m| {
+                eprintln!("{:?}\n", m);
+                m
+            })
+            .last()
+            .unwrap()
+            .unwrap();
         assert_eq!(machine_end.stack.height(), 1);
         let top_addr = machine_end.stack.peak().unwrap();
         let top_node = machine_end.must_access_node(*top_addr);
@@ -445,7 +481,8 @@ mod test_compilation {
                 Instruction::MkAp,
                 Instruction::Push(1),
                 Instruction::MkAp,
-                Instruction::Slide(2),
+                Instruction::Update(1),
+                Instruction::Pop(1),
                 Instruction::Unwind,
             ],
         )
@@ -459,7 +496,8 @@ mod test_compilation {
             2,
             vec![
                 Instruction::Push(0),
-                Instruction::Slide(3),
+                Instruction::Update(2),
+                Instruction::Pop(2),
                 Instruction::Unwind,
             ],
         );
@@ -479,7 +517,8 @@ mod test_compilation {
                 Instruction::Push(2),
                 Instruction::MkAp,
                 Instruction::MkAp,
-                Instruction::Slide(4),
+                Instruction::Update(3),
+                Instruction::Pop(3),
                 Instruction::Unwind,
             ],
         );
@@ -497,7 +536,8 @@ mod test_compilation {
                 Instruction::PushGlobal(ast::Name::new("_prim_add")),
                 Instruction::MkAp,
                 Instruction::MkAp,
-                Instruction::Slide(1),
+                Instruction::Update(0),
+                Instruction::Pop(0),
                 Instruction::Unwind,
             ],
         )

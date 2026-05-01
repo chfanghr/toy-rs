@@ -1,9 +1,7 @@
-use std::{mem, ops::Deref, rc::Rc};
+use std::{mem, rc::Rc};
 
 use anyhow::{anyhow, Context, Ok, Result};
-use chumsky::extra::Err;
 use derive_getters::Getters;
-use itertools::Either;
 
 use crate::{
     parser::ast,
@@ -109,24 +107,25 @@ impl Machine {
     }
 
     pub(super) fn step(&mut self) -> Result<()> {
-        let instr = self.code.get(self.instr_ptr).unwrap().clone();
+        let code = self.code.clone();
+        let instr = code.get(self.instr_ptr).unwrap();
         self.dispatch(instr)?;
         self.instr_ptr += 1;
         Ok(())
     }
 
-    fn dispatch(&mut self, i: Instruction) -> Result<()> {
+    fn dispatch(&mut self, i: &Instruction) -> Result<()> {
         match i {
             Instruction::Unwind => self.handle_unwind().context("Unwind"),
             Instruction::PushGlobal(name) => self.handle_push_global(name).context("PushGlobal"),
-            Instruction::PushNum(i) => self.handle_push_num(i).context("PushNum"),
-            Instruction::Push(n) => self.handle_push(n).context("Push"),
+            Instruction::PushNum(i) => self.handle_push_num(*i).context("PushNum"),
+            Instruction::Push(n) => self.handle_push(*n).context("Push"),
             Instruction::MkAp => self.handle_mk_ap().context("MkAp"),
-            Instruction::Slide(n) => self.handle_slide(n).context("Slide"),
+            Instruction::Slide(n) => self.handle_slide(*n).context("Slide"),
         }
     }
 
-    fn handle_push_global(&mut self, name: ast::Name) -> Result<()> {
+    fn handle_push_global(&mut self, name: &ast::Name) -> Result<()> {
         let addr = self.lookup_global(&name)?;
         self.stack.push(addr);
         Ok(())

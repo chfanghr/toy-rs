@@ -2,6 +2,7 @@ use std::{collections::LinkedList, mem, rc::Rc};
 
 use anyhow::{anyhow, Context, Ok, Result};
 use derive_getters::Getters;
+use intmap::IntMap;
 use itertools::Itertools;
 
 use crate::{
@@ -69,6 +70,8 @@ pub struct Machine {
     heap: Heap<Node>,
     #[getter(skip)]
     globals: Assoc<ast::Name, Addr>,
+    #[getter(skip)]
+    integers: IntMap<i64, Addr>,
     stats: Stats,
 }
 
@@ -120,6 +123,7 @@ impl Machine {
             stack: Stack::new(),
             heap,
             globals,
+            integers: IntMap::new(),
             stats: Stats::new(),
         })
     }
@@ -176,7 +180,7 @@ impl Machine {
     }
 
     fn handle_push_num(&mut self, i: i64) -> Result<InstrPtrNext> {
-        let addr = self.heap.alloc(Node::Num(i));
+        let addr = self.alloc_num_node(i);
         self.stack.push(addr);
         Ok(InstrPtrNext::Advance)
     }
@@ -266,6 +270,17 @@ impl Machine {
             .lookup(name)
             .map(|x| *x)
             .ok_or(anyhow!("global not found: {:?}", name))
+    }
+
+    fn alloc_num_node(&mut self, i: i64) -> Addr {
+        match self.integers.get(i) {
+            Some(addr) => *addr,
+            None => {
+                let addr = self.heap.alloc(Node::Num(i));
+                self.integers.insert(i, addr);
+                addr
+            }
+        }
     }
 
     pub fn history(self) -> MachineHistoryIter {

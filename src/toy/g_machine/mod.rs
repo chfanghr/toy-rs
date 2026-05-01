@@ -1,4 +1,4 @@
-use std::{mem, rc::Rc};
+use std::{collections::LinkedList, iter, mem, rc::Rc};
 
 use anyhow::{anyhow, Context, Ok, Result};
 use derive_getters::Getters;
@@ -227,6 +227,165 @@ impl Machine {
 
     pub fn history(self) -> MachineHistoryIter {
         MachineHistoryIter::new(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompiledSuperCombinator {
+    name: ast::Name,
+    n_args: usize,
+    code: Code,
+}
+
+fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombinator> {
+    let env: Assoc<ast::Name, usize> = sc
+        .arguments
+        .into_iter()
+        .enumerate()
+        .map(|(x, y)| (y, x))
+        .collect();
+    let n_env = env.size();
+    let code = compile_expr(sc.body, env)?;
+    Ok(CompiledSuperCombinator {
+        name: sc.name,
+        n_args: n_env,
+        code,
+    })
+}
+
+enum CompilationTodo {
+    ToCompile(ast::Expr<ast::Name>, usize),
+    Done(Instruction),
+}
+
+fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result<Code> {
+    let mut todo_stack = LinkedList::<CompilationTodo>::new();
+    let mut code = Code::new();
+
+    todo_stack.push_front(CompilationTodo::ToCompile(e, 0));
+
+    while let Some(todo) = todo_stack.pop_front() {
+        match todo {
+            CompilationTodo::ToCompile(expr, added_offset) => match expr {
+                ast::Expr::Var(name) => todo_stack.push_front(CompilationTodo::Done(
+                    env.lookup(&name)
+                        .map_or(Instruction::PushGlobal(name), |offset| {
+                            Instruction::Push(*offset + added_offset)
+                        }),
+                )),
+                ast::Expr::Num(i) => {
+                    todo_stack.push_front(CompilationTodo::Done(Instruction::PushNum(i.0)))
+                }
+                ast::Expr::Ap(ap) => {
+                    let ap = *ap;
+                    todo_stack.push_front(CompilationTodo::Done(Instruction::MkAp));
+                    todo_stack.push_front(CompilationTodo::ToCompile(ap.l, added_offset + 1));
+                    todo_stack.push_front(CompilationTodo::ToCompile(ap.r, added_offset));
+                }
+                e => todo!("unable to compile {:?} yet", e),
+            },
+            CompilationTodo::Done(i) => code.push(i),
+        }
+    }
+
+    code.push(Instruction::Slide(env.size() + 1));
+    code.push(Instruction::Unwind);
+
+    Ok(code)
+}
+
+#[cfg(test)]
+mod test {
+    use crate::parser::must_lex_and_parse_sc;
+
+    use super::*;
+
+    fn mk_compile_sc_expected_code_test(
+        t: &str,
+        expected_name: ast::Name,
+        expected_n_args: usize,
+        expected_code: Code,
+    ) {
+        let ast = must_lex_and_parse_sc(t);
+        let compiled = compile_sc(ast).unwrap();
+        assert_eq!(
+            compiled,
+            CompiledSuperCombinator {
+                name: expected_name,
+                n_args: expected_n_args,
+                code: expected_code
+            }
+        )
+    }
+
+    #[test]
+    fn test_compile_fix() {
+        mk_compile_sc_expected_code_test(
+            "fix f = f (fix f)",
+            ast::Name::new("fix"),
+            1,
+            vec![
+                Instruction::Push(0),
+                Instruction::PushGlobal(ast::Name::new("fix")),
+                Instruction::MkAp,
+                Instruction::Push(1),
+                Instruction::MkAp,
+                Instruction::Slide(2),
+                Instruction::Unwind,
+            ],
+        )
+    }
+
+    #[test]
+    fn test_compile_k() {
+        mk_compile_sc_expected_code_test(
+            "const a b = a",
+            ast::Name::new("const"),
+            2,
+            vec![
+                Instruction::Push(0),
+                Instruction::Slide(3),
+                Instruction::Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_compile_s() {
+        mk_compile_sc_expected_code_test(
+            "s f g x = f x (g x)",
+            ast::Name::new("s"),
+            3,
+            vec![
+                Instruction::Push(2),
+                Instruction::Push(2),
+                Instruction::MkAp,
+                Instruction::Push(3),
+                Instruction::Push(2),
+                Instruction::MkAp,
+                Instruction::MkAp,
+                Instruction::Slide(4),
+                Instruction::Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_compile_add() {
+        mk_compile_sc_expected_code_test(
+            "two = 1 + 1",
+            ast::Name::new("two"),
+            0,
+            vec![
+                Instruction::PushNum(1),
+                Instruction::PushNum(1),
+                Instruction::PushGlobal(ast::Name::new("_prim_add")),
+                Instruction::MkAp,
+                Instruction::MkAp,
+                Instruction::Slide(1),
+                Instruction::Unwind,
+            ],
+        )
     }
 }
 

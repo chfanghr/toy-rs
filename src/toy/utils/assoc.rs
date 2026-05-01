@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 #[derive(Debug, Clone)]
 pub struct Assoc<K, V>(Vec<BTreeMap<K, V>>);
@@ -29,6 +29,19 @@ impl<K: Ord, V> Assoc<K, V> {
             .collect::<BTreeMap<&K, &V>>()
             .into_iter()
             .map(|(_, v)| v)
+    }
+
+    pub fn size(&self) -> usize {
+        self.values().count()
+    }
+}
+
+impl<K, V> iter::FromIterator<(K, V)> for Assoc<K, V>
+where
+    K: Ord,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Assoc(vec![iter.into_iter().collect()])
     }
 }
 

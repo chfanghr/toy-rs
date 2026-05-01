@@ -30,7 +30,7 @@ type Code = Vec<Instruction>;
 enum Node {
     Num(i64),
     Ap(Addr, Addr),
-    Global(usize, Code),
+    Global(usize, Rc<Code>),
 }
 
 #[derive(Debug, Clone, Getters)]
@@ -52,7 +52,7 @@ impl Stats {
 #[derive(Debug, Clone, Getters)]
 pub struct Machine {
     #[getter(skip)]
-    code: Code,
+    code: Rc<Code>,
     #[getter(skip)]
     instr_ptr: usize,
     #[getter(skip)]
@@ -192,7 +192,7 @@ impl Machine {
             Node::Num(_) => (),
             Node::Ap(l, _) => {
                 self.stack.push(*l);
-                self.instr_ptr -= 1;
+                self.instr_ptr -= 1; // To unwind again
             }
             Node::Global(_, instrs) => {
                 self.code = instrs.clone();

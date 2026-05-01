@@ -206,24 +206,22 @@ impl Machine {
     }
 
     fn handle_push(&mut self, n: usize) -> Result<InstrPtrNext> {
-        let n = n + 1; // skip the sc
-        let addr = self
-            .stack
-            .peak_nth_from_top_cloned(n)
-            .ok_or(anyhow!("not enough elements on the stack: wanted {}", n))?;
-        let r = self.must_extract_ap_node_r(addr);
-        self.stack.push(r);
+        let addr = self.stack.peak_nth_from_top_cloned(n).expect(&format!(
+            "BUG: not enough args, expected {} which is greater than the stack size {}",
+            n,
+            self.stack.height()
+        ));
+        self.stack.push(addr);
         Ok(InstrPtrNext::Advance)
     }
 
     fn handle_update(&mut self, n: usize) -> Result<InstrPtrNext> {
         let root_addr = self.stack.pop_cloned().expect("BUG: stack is empty");
         let root_addr = self.follow_indirect(root_addr);
-        let node_to_update_addr = self.stack.peak_nth_from_top_cloned(n).ok_or(anyhow!(
-            "not enough args: expected {}, but only {} available on the stack",
-            n,
-            self.stack.height()
-        ))?;
+        let node_to_update_addr = self
+            .stack
+            .peak_nth_from_top_cloned(n)
+            .expect("BUG: unable to find addr of node to be updated");
 
         if node_to_update_addr == root_addr {
             bail!("infinite loop: {:?}", root_addr)
@@ -235,9 +233,13 @@ impl Machine {
     }
 
     fn handle_pop(&mut self, n: usize) -> Result<InstrPtrNext> {
-        if n != 0 {
+        if n > 0 {
             let n_popped = self.stack.pop_n(n).len();
-            assert_eq!(n_popped, n, "COMPILER BUG: not enough args: expected {}, got {}. This should have been caught by Update", n, n_popped)
+            assert_eq!(
+                n_popped, n,
+                "BUG: not enough args: expected {}, got {}. This should have been caught by Update",
+                n, n_popped
+            )
         }
 
         Ok(InstrPtrNext::Advance)
@@ -256,14 +258,33 @@ impl Machine {
                 self.stack.push(*l);
                 InstrPtrNext::Stay
             }
-            Node::Global(_, code) => {
-                self.load_code(code.clone());
+            Node::Global(n_args, code) => {
+                let n_args = *n_args;
+                let code = code.clone();
+
+                if n_args > 0 {
+                    assert_eq!(self.stack.pop_cloned().unwrap(), addr);
+
+                    let ap_node_addrs = self.stack.pop_n_cloned(n_args);
+                    let n_args_got = ap_node_addrs.len();
+                    if n_args_got != n_args {
+                        bail!("not enough args: expected {}, got {}", n_args, n_args_got)
+                    }
+                    let last_ap_node_addr = ap_node_addrs.last().copied().unwrap();
+                    self.stack.push(last_ap_node_addr);
+                    ap_node_addrs.into_iter().rev().for_each(|addr| {
+                        let r_addr = self.must_extract_ap_node_r(addr);
+                        self.stack.push(r_addr);
+                    });
+                }
+
+                self.load_code(code);
                 InstrPtrNext::Stay
             }
-            Node::Indirect(addr) => {
-                let addr = *addr;
-                self.stack.pop().unwrap();
-                self.stack.push(addr);
+            Node::Indirect(indirect_addr) => {
+                let indirect_addr = *indirect_addr;
+                assert_eq!(self.stack.pop_cloned().unwrap(), addr);
+                self.stack.push(indirect_addr);
                 InstrPtrNext::Stay
             }
         })

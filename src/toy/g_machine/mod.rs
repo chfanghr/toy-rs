@@ -1,10 +1,14 @@
-use std::{collections::LinkedList, iter, mem, rc::Rc};
+use std::{collections::LinkedList, mem, rc::Rc};
 
 use anyhow::{anyhow, Context, Ok, Result};
 use derive_getters::Getters;
+use itertools::Itertools;
 
 use crate::{
-    parser::ast,
+    parser::{
+        ast::{self, Program},
+        must_lex_and_parse_sc,
+    },
     utils::{
         assoc::Assoc,
         heap::{Addr, Heap},
@@ -24,7 +28,7 @@ enum Instruction {
 
 type Code = Vec<Instruction>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Node {
     Num(i64),
     Ap(Addr, Addr),
@@ -45,6 +49,12 @@ impl Stats {
     fn incr_steps(&mut self) {
         self.steps += 1;
     }
+}
+
+#[derive(Debug)]
+enum InstrPtrNext {
+    Stay,
+    Advance,
 }
 
 #[derive(Debug, Clone, Getters)]
@@ -102,19 +112,53 @@ impl MachineHistoryIter {
 }
 
 impl Machine {
+    pub fn new(program: CompiledProgram) -> Result<Self> {
+        let (heap, globals) = build_initial_heap(program)?;
+        Ok(Self {
+            code: Rc::new(vec![]),
+            instr_ptr: 0,
+            stack: Stack::new(),
+            heap,
+            globals,
+            stats: Stats::new(),
+        })
+    }
+
     pub(super) fn is_done(&self) -> bool {
         self.instr_ptr >= self.code.len()
+    }
+
+    fn load_code(&mut self, code: Rc<Code>) {
+        self.code = code;
+        self.instr_ptr = 0;
+    }
+
+    pub fn setup_to_run(&mut self, entry_point: ast::Name) {
+        self.load_code(Rc::new(vec![
+            Instruction::PushGlobal(entry_point),
+            Instruction::Unwind,
+        ]));
+        self.stack.reset();
+        self.stats = Stats::new();
+    }
+
+    fn do_admin(&mut self) {
+        self.stats.incr_steps();
     }
 
     pub(super) fn step(&mut self) -> Result<()> {
         let code = self.code.clone();
         let instr = code.get(self.instr_ptr).unwrap();
-        self.dispatch(instr)?;
-        self.instr_ptr += 1;
+        let next = self.dispatch(instr)?;
+        match next {
+            InstrPtrNext::Stay => (),
+            InstrPtrNext::Advance => self.instr_ptr += 1,
+        }
+        self.do_admin();
         Ok(())
     }
 
-    fn dispatch(&mut self, i: &Instruction) -> Result<()> {
+    fn dispatch(&mut self, i: &Instruction) -> Result<InstrPtrNext> {
         match i {
             Instruction::Unwind => self.handle_unwind().context("Unwind"),
             Instruction::PushGlobal(name) => self.handle_push_global(name).context("PushGlobal"),
@@ -125,19 +169,19 @@ impl Machine {
         }
     }
 
-    fn handle_push_global(&mut self, name: &ast::Name) -> Result<()> {
+    fn handle_push_global(&mut self, name: &ast::Name) -> Result<InstrPtrNext> {
         let addr = self.lookup_global(&name)?;
         self.stack.push(addr);
-        Ok(())
+        Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_push_num(&mut self, i: i64) -> Result<()> {
+    fn handle_push_num(&mut self, i: i64) -> Result<InstrPtrNext> {
         let addr = self.heap.alloc(Node::Num(i));
         self.stack.push(addr);
-        Ok(())
+        Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_mk_ap(&mut self) -> Result<()> {
+    fn handle_mk_ap(&mut self) -> Result<InstrPtrNext> {
         let l = self
             .stack
             .pop()
@@ -151,21 +195,21 @@ impl Machine {
         let node = Node::Ap(l, r);
         let addr = self.heap.alloc(node);
         self.stack.push(addr);
-        Ok(())
+        Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_push(&mut self, n: usize) -> Result<()> {
-        let n = n + 1;
+    fn handle_push(&mut self, n: usize) -> Result<InstrPtrNext> {
+        let n = n + 1; // skip the sc
         let addr = self
             .stack
-            .peak_nth_from_top_cloned(1 + n)
+            .peak_nth_from_top_cloned(n)
             .ok_or(anyhow!("not enough elements on the stack: wanted {}", n))?;
         let r = self.must_extract_ap_node_r(addr);
         self.stack.push(r);
-        Ok(())
+        Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_slide(&mut self, n: usize) -> Result<()> {
+    fn handle_slide(&mut self, n: usize) -> Result<InstrPtrNext> {
         let root = self
             .stack
             .pop()
@@ -177,28 +221,27 @@ impl Machine {
             "COMPILER BUG: not enough args, should have been caught when executing Push"
         );
         self.stack.push(root);
-        Ok(())
+        Ok(InstrPtrNext::Advance)
     }
 
-    fn handle_unwind(&mut self) -> Result<()> {
+    fn handle_unwind(&mut self) -> Result<InstrPtrNext> {
         let addr = self
             .stack
             .peak()
             .copied()
             .expect("COMPILER BUG: trying to unwind an empty stack");
 
-        match self.must_access_node(addr) {
-            Node::Num(_) => (),
+        Ok(match self.must_access_node(addr) {
+            Node::Num(_) => InstrPtrNext::Advance,
             Node::Ap(l, _) => {
                 self.stack.push(*l);
-                self.instr_ptr -= 1; // To unwind again
+                InstrPtrNext::Stay
             }
-            Node::Global(_, instrs) => {
-                self.code = instrs.clone();
-                self.instr_ptr = 0;
+            Node::Global(_, code) => {
+                self.load_code(code.clone());
+                InstrPtrNext::Stay
             }
-        };
-        Ok(())
+        })
     }
 
     fn must_extract_ap_node_r(&self, addr: Addr) -> Addr {
@@ -228,6 +271,41 @@ impl Machine {
     pub fn history(self) -> MachineHistoryIter {
         MachineHistoryIter::new(self)
     }
+}
+
+fn prelude_ski() -> Vec<ast::SuperCombinator<ast::Name>> {
+    vec![
+        must_lex_and_parse_sc("i x = x"),
+        must_lex_and_parse_sc("k x y = x"),
+        must_lex_and_parse_sc("s f g x = f x (g x)"),
+    ]
+}
+
+fn build_initial_heap(program: CompiledProgram) -> Result<(Heap<Node>, Assoc<ast::Name, Addr>)> {
+    Ok(program.0.into_iter().fold(
+        (Heap::new(), Assoc::new()),
+        |(mut heap, mut globals), sc| {
+            let addr = heap.alloc(Node::Global(sc.n_args, Rc::new(sc.code)));
+            globals.insert(sc.name, addr);
+            (heap, globals)
+        },
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledProgram(Vec<CompiledSuperCombinator>);
+
+pub fn compile_program(prog: Program<ast::Name>) -> Result<CompiledProgram> {
+    Ok(CompiledProgram(
+        prelude_ski()
+            .into_iter()
+            .chain(prog.0)
+            .map(compile_sc)
+            .collect::<Result<Vec<CompiledSuperCombinator>>>()?
+            .into_iter()
+            .dedup_by(|l, r| l.name == r.name)
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,7 +373,29 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result
 }
 
 #[cfg(test)]
-mod test {
+mod test_machine {
+    use super::*;
+    use crate::parser::must_lex_and_parse_sc;
+
+    #[test]
+    fn test_ski() {
+        let main = "main = s k k (i 3)";
+        let program = ast::Program(vec![must_lex_and_parse_sc(main)]);
+        let compiled_program = compile_program(program).unwrap();
+        let mut machine = Machine::new(compiled_program).unwrap();
+        machine.setup_to_run(ast::Name::new("main"));
+        let h = machine.history();
+        let machine_end = h.last().unwrap().unwrap();
+        assert_eq!(machine_end.stack.height(), 1);
+        let top_addr = machine_end.stack.peak().unwrap();
+        let top_node = machine_end.must_access_node(*top_addr);
+        assert_eq!(top_node, &Node::Num(3));
+        eprintln!("stats: {:?}", machine_end.stats());
+    }
+}
+
+#[cfg(test)]
+mod test_compilation {
     use crate::parser::must_lex_and_parse_sc;
 
     use super::*;

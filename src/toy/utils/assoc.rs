@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, iter};
+use std::{borrow::Borrow, collections::BTreeMap, iter};
 
 #[derive(Debug, Clone)]
 pub struct Assoc<K, V>(Vec<BTreeMap<K, V>>);
@@ -12,7 +12,11 @@ impl<K: Ord, V> Assoc<K, V> {
         let _ = self.0.first_mut().unwrap().insert(k, v);
     }
 
-    pub fn lookup(&self, k: &K) -> Option<&V> {
+    pub fn lookup<Q>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.0.iter().find_map(|b| b.get(k))
     }
 

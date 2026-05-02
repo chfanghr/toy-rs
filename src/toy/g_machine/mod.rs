@@ -1,4 +1,8 @@
-use std::{collections::LinkedList, mem, rc::Rc};
+use std::{
+    collections::{BTreeMap, LinkedList},
+    mem,
+    rc::Rc,
+};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
 use derive_getters::Getters;
@@ -11,11 +15,12 @@ use crate::{
         must_lex_and_parse_sc,
     },
     utils::{
-        assoc::Assoc,
         heap::{Addr, Heap},
         stack::Stack,
     },
 };
+
+type Assoc<K, V> = BTreeMap<K, V>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Instruction {
@@ -341,7 +346,7 @@ impl Machine {
 
     fn lookup_global(&self, name: &ast::Name) -> Result<Addr> {
         self.globals
-            .lookup(name)
+            .get(name)
             .map(|x| *x)
             .ok_or(anyhow!("global not found: {:?}", name))
     }
@@ -417,13 +422,13 @@ struct CompiledSuperCombinator {
 }
 
 fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombinator> {
-    let env: Assoc<ast::Name, usize> = sc
+    let env: Assoc<Rc<ast::Name>, usize> = sc
         .arguments
         .into_iter()
         .enumerate()
-        .map(|(x, y)| (y, x))
+        .map(|(x, y)| (Rc::new(y), x))
         .collect();
-    let n_env = env.size();
+    let n_env = env.len();
     let code = compile_expr(sc.body, env)?;
     Ok(CompiledSuperCombinator {
         name: sc.name,
@@ -433,23 +438,24 @@ fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombin
 }
 
 enum CompilationTodo {
-    ToCompile(ast::Expr<ast::Name>, usize),
+    ToCompile(ast::Expr<ast::Name>, Assoc<Rc<ast::Name>, usize>),
     Done(Instruction),
 }
 
-fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result<Code> {
+fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<Rc<ast::Name>, usize>) -> Result<Code> {
+    let n_args = env.len();
     let mut todo_stack = LinkedList::<CompilationTodo>::new();
     let mut code = Code::new();
 
-    todo_stack.push_front(CompilationTodo::ToCompile(e, 0));
+    todo_stack.push_front(CompilationTodo::ToCompile(e, env));
 
     while let Some(todo) = todo_stack.pop_front() {
         match todo {
-            CompilationTodo::ToCompile(expr, added_offset) => match expr {
+            CompilationTodo::ToCompile(expr, env) => match expr {
                 ast::Expr::Var(name) => todo_stack.push_front(CompilationTodo::Done(
-                    env.lookup(&name)
+                    env.get(&name)
                         .map_or(Instruction::PushGlobal(name), |offset| {
-                            Instruction::Push(*offset + added_offset)
+                            Instruction::Push(*offset)
                         }),
                 )),
                 ast::Expr::Num(i) => {
@@ -458,8 +464,14 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result
                 ast::Expr::Ap(ap) => {
                     let ap = *ap;
                     todo_stack.push_front(CompilationTodo::Done(Instruction::MkAp));
-                    todo_stack.push_front(CompilationTodo::ToCompile(ap.l, added_offset + 1));
-                    todo_stack.push_front(CompilationTodo::ToCompile(ap.r, added_offset));
+                    let l_env = {
+                        let mut env = env.clone();
+                        env.values_mut().for_each(|offset| *offset += 1);
+                        env
+                    };
+                    let r_env = env;
+                    todo_stack.push_front(CompilationTodo::ToCompile(ap.l, l_env));
+                    todo_stack.push_front(CompilationTodo::ToCompile(ap.r, r_env));
                 }
                 e => todo!("unable to compile {:?} yet", e),
             },
@@ -467,8 +479,8 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<ast::Name, usize>) -> Result
         }
     }
 
-    code.push(Instruction::Update(env.size()));
-    code.push(Instruction::Pop(env.size()));
+    code.push(Instruction::Update(n_args));
+    code.push(Instruction::Pop(n_args));
     code.push(Instruction::Unwind);
 
     Ok(code)

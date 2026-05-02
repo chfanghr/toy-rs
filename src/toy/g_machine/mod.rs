@@ -26,6 +26,7 @@ enum Instruction {
     MkAp,
     Update(usize),
     Pop(usize),
+    Alloc(usize),
 }
 
 type Code = Vec<Instruction>;
@@ -36,6 +37,7 @@ enum Node {
     Ap(Addr, Addr),
     Global(usize, Rc<Code>),
     Indirect(Addr),
+    Dummy,
 }
 
 #[derive(Debug, Clone, Getters)]
@@ -173,6 +175,7 @@ impl Machine {
             Instruction::MkAp => self.handle_mk_ap().context("MkAp"),
             Instruction::Update(n) => self.handle_update(*n).context("Update"),
             Instruction::Pop(n) => self.handle_pop(*n).context("Pop"),
+            Instruction::Alloc(n) => self.handle_alloc(*n).context("Alloc"),
         }
     }
 
@@ -287,7 +290,20 @@ impl Machine {
                 self.stack.push(indirect_addr);
                 InstrPtrNext::Stay
             }
+            Node::Dummy => {
+                panic!("BUG: dummy node while unwinding, incomplete instantiation?")
+            }
         })
+    }
+
+    fn handle_alloc(&mut self, n: usize) -> Result<InstrPtrNext> {
+        (0..n).try_for_each(|_| {
+            let addr = self.heap.alloc(Node::Dummy);
+            self.stack.push(addr);
+            Ok(())
+        })?;
+
+        Ok(InstrPtrNext::Advance)
     }
 
     fn must_extract_ap_node_r(&self, addr: Addr) -> Addr {

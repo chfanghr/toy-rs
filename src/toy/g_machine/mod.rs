@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
+use chumsky::container::Container;
 use derive_getters::Getters;
 use intmap::IntMap;
 use itertools::Itertools;
@@ -430,7 +431,7 @@ fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombin
         .map(|(x, y)| (Rc::new(y), x))
         .collect();
     let n_env = env.len();
-    let code = compile_expr(sc.body, env)?;
+    let code = compile_expr(sc.body, Rc::new(env))?;
     Ok(CompiledSuperCombinator {
         name: sc.name,
         n_args: n_env,
@@ -440,20 +441,20 @@ fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombin
 
 #[derive(Debug, Clone)]
 enum CompilationTodo {
-    ToCompile(ast::Expr<ast::Name>, Assoc<Rc<ast::Name>, usize>),
+    ToCompile(ast::Expr<ast::Name>, Rc<Assoc<Rc<ast::Name>, usize>>),
     Done(Instruction),
 }
 
-fn env_offset_by_one(env: &mut Assoc<Rc<ast::Name>, usize>) {
-    env.values_mut().for_each(|offset| *offset += 1);
+fn env_offset_by(n: usize, env: &mut Assoc<Rc<ast::Name>, usize>) {
+    env.values_mut().for_each(|offset| *offset += n);
 }
 
-fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<Rc<ast::Name>, usize>) -> Result<Code> {
-    let n_args = env.len();
+fn compile_expr(e: ast::Expr<ast::Name>, rc_env: Rc<Assoc<Rc<ast::Name>, usize>>) -> Result<Code> {
+    let n_args = rc_env.len();
     let mut todo_stack = LinkedList::<CompilationTodo>::new();
     let mut code = Code::new();
 
-    todo_stack.push_front(CompilationTodo::ToCompile(e, env));
+    todo_stack.push_front(CompilationTodo::ToCompile(e, rc_env));
 
     while let Some(todo) = todo_stack.pop_front() {
         match todo {
@@ -469,45 +470,98 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<Rc<ast::Name>, usize>) -> Re
                 }
                 ast::Expr::Ap(ap) => {
                     let ap = *ap;
-                    todo_stack.push_front(CompilationTodo::Done(Instruction::MkAp));
+                    let r_env = env.clone();
                     let l_env = {
-                        let mut env = env.clone();
-                        env_offset_by_one(&mut env);
-                        env
+                        let mut env = Rc::unwrap_or_clone(env);
+                        env_offset_by(1, &mut env);
+                        Rc::new(env)
                     };
-                    let r_env = env;
-                    todo_stack.push_front(CompilationTodo::ToCompile(ap.l, l_env));
-                    todo_stack.push_front(CompilationTodo::ToCompile(ap.r, r_env));
+                    [
+                        CompilationTodo::ToCompile(ap.r, r_env),
+                        CompilationTodo::ToCompile(ap.l, l_env),
+                        CompilationTodo::Done(Instruction::MkAp),
+                    ]
+                    .into_iter()
+                    .rev()
+                    .for_each(|todo| todo_stack.push_front(todo));
                 }
                 ast::Expr::Let(l) => {
                     let l = *l;
 
-                    if l.is_recursive {
-                        todo!()
+                    let n_binds = l.definitions.len();
+                    let pre_alloc_todo = CompilationTodo::Done(Instruction::Alloc(n_binds));
+
+                    let env = Rc::unwrap_or_clone(env);
+
+                    let (def_todos, rc_env) = if l.is_recursive {
+                        let mut env = env;
+                        env_offset_by(n_binds, &mut env);
+
+                        let (extra_env, def_body_update_offset_pairs): (Vec<_>, Vec<_>) = l
+                            .definitions
+                            .into_iter()
+                            .rev()
+                            .enumerate()
+                            .map(|(idx, def)| ((Rc::new(def.binder), idx), (def.body, idx)))
+                            .unzip();
+
+                        let duplicated_names = extra_env
+                            .iter()
+                            .counts_by(|(n, _)| n.clone())
+                            .into_iter()
+                            .filter_map(|(name, count)| (count > 1).then_some(name))
+                            .collect::<Vec<_>>();
+                        if !duplicated_names.is_empty() {
+                            let duplicated_names = duplicated_names
+                                .iter()
+                                .map(|name| name.0.as_str())
+                                .join(", ");
+                            bail!("found duplicate binders in letrec: {}", duplicated_names)
+                        }
+
+                        env.extend(extra_env);
+                        let rc_env = Rc::new(env);
+
+                        let def_todos = iter::once(pre_alloc_todo)
+                            .chain(def_body_update_offset_pairs.into_iter().flat_map(
+                                |(body, update_offset)| {
+                                    [
+                                        CompilationTodo::ToCompile(body, rc_env.clone()),
+                                        CompilationTodo::Done(Instruction::Update(update_offset)),
+                                    ]
+                                    .into_iter()
+                                },
+                            ))
+                            .collect::<Vec<_>>();
+
+                        (def_todos, rc_env)
                     } else {
-                        let n_binds = l.definitions.len();
                         let mut env = env;
                         let def_todos = l
                             .definitions
                             .into_iter()
                             .scan(&mut env, |env, def| {
-                                let res = CompilationTodo::ToCompile(def.body, env.clone());
-                                env_offset_by_one(env);
+                                let res =
+                                    CompilationTodo::ToCompile(def.body, Rc::new(env.clone()));
+                                env_offset_by(1, env);
                                 env.insert(Rc::new(def.binder), 0);
                                 Some(res)
                             })
                             .collect::<Vec<_>>();
-                        let body_env = env;
-                        let body_todo = CompilationTodo::ToCompile(l.body, body_env);
-                        def_todos
-                            .into_iter()
-                            .chain(iter::once(body_todo))
-                            .chain(iter::once(CompilationTodo::Done(Instruction::Slide(
-                                n_binds,
-                            ))))
-                            .rev()
-                            .for_each(|todo| todo_stack.push_front(todo));
+
+                        (def_todos, Rc::new(env))
                     };
+
+                    let body_todo = CompilationTodo::ToCompile(l.body, rc_env);
+
+                    def_todos
+                        .into_iter()
+                        .chain(iter::once(body_todo))
+                        .chain(iter::once(CompilationTodo::Done(Instruction::Slide(
+                            n_binds,
+                        ))))
+                        .rev()
+                        .for_each(|todo| todo_stack.push_front(todo));
                 }
                 e => todo!("unable to compile {:?} yet", e),
             },
@@ -572,6 +626,27 @@ mod test_compilation {
                 n_args: expected_n_args,
                 code: expected_code
             }
+        )
+    }
+
+    #[test]
+    fn test_compile_letrec_fix() {
+        mk_compile_sc_expected_code_test(
+            "fix f = letrec x = f x in x",
+            ast::Name::new("fix"),
+            1,
+            vec![
+                Instruction::Alloc(1),
+                Instruction::Push(0),
+                Instruction::Push(2),
+                Instruction::MkAp,
+                Instruction::Update(0),
+                Instruction::Push(0),
+                Instruction::Slide(1),
+                Instruction::Update(1),
+                Instruction::Pop(1),
+                Instruction::Unwind,
+            ],
         )
     }
 

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, LinkedList},
-    mem,
+    iter, mem,
     rc::Rc,
 };
 
@@ -403,13 +403,14 @@ pub struct CompiledProgram(Vec<CompiledSuperCombinator>);
 
 pub fn compile_program(prog: Program<ast::Name>) -> Result<CompiledProgram> {
     Ok(CompiledProgram(
-        prelude_ski()
+        prog.0
             .into_iter()
-            .chain(prog.0)
+            .chain(prelude_ski())
+            .into_iter()
+            .dedup_by(|l, r| l.name == r.name)
             .map(compile_sc)
             .collect::<Result<Vec<CompiledSuperCombinator>>>()?
             .into_iter()
-            .dedup_by(|l, r| l.name == r.name)
             .collect(),
     ))
 }
@@ -437,9 +438,14 @@ fn compile_sc(sc: ast::SuperCombinator<ast::Name>) -> Result<CompiledSuperCombin
     })
 }
 
+#[derive(Debug, Clone)]
 enum CompilationTodo {
     ToCompile(ast::Expr<ast::Name>, Assoc<Rc<ast::Name>, usize>),
     Done(Instruction),
+}
+
+fn env_offset_by_one(env: &mut Assoc<Rc<ast::Name>, usize>) {
+    env.values_mut().for_each(|offset| *offset += 1);
 }
 
 fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<Rc<ast::Name>, usize>) -> Result<Code> {
@@ -466,12 +472,42 @@ fn compile_expr(e: ast::Expr<ast::Name>, env: Assoc<Rc<ast::Name>, usize>) -> Re
                     todo_stack.push_front(CompilationTodo::Done(Instruction::MkAp));
                     let l_env = {
                         let mut env = env.clone();
-                        env.values_mut().for_each(|offset| *offset += 1);
+                        env_offset_by_one(&mut env);
                         env
                     };
                     let r_env = env;
                     todo_stack.push_front(CompilationTodo::ToCompile(ap.l, l_env));
                     todo_stack.push_front(CompilationTodo::ToCompile(ap.r, r_env));
+                }
+                ast::Expr::Let(l) => {
+                    let l = *l;
+
+                    if l.is_recursive {
+                        todo!()
+                    } else {
+                        let n_binds = l.definitions.len();
+                        let mut env = env;
+                        let def_todos = l
+                            .definitions
+                            .into_iter()
+                            .scan(&mut env, |env, def| {
+                                let res = CompilationTodo::ToCompile(def.body, env.clone());
+                                env_offset_by_one(env);
+                                env.insert(Rc::new(def.binder), 0);
+                                Some(res)
+                            })
+                            .collect::<Vec<_>>();
+                        let body_env = env;
+                        let body_todo = CompilationTodo::ToCompile(l.body, body_env);
+                        def_todos
+                            .into_iter()
+                            .chain(iter::once(body_todo))
+                            .chain(iter::once(CompilationTodo::Done(Instruction::Slide(
+                                n_binds,
+                            ))))
+                            .rev()
+                            .for_each(|todo| todo_stack.push_front(todo));
+                    };
                 }
                 e => todo!("unable to compile {:?} yet", e),
             },
@@ -536,6 +572,28 @@ mod test_compilation {
                 n_args: expected_n_args,
                 code: expected_code
             }
+        )
+    }
+
+    #[test]
+    fn test_compile_let() {
+        mk_compile_sc_expected_code_test(
+            "f = let x = 0; y = x in x + y",
+            ast::Name::new("f"),
+            0,
+            vec![
+                Instruction::PushNum(0),
+                Instruction::Push(0),
+                Instruction::Push(0),
+                Instruction::Push(2),
+                Instruction::PushGlobal(ast::Name::new("_prim_add")),
+                Instruction::MkAp,
+                Instruction::MkAp,
+                Instruction::Slide(2),
+                Instruction::Update(0),
+                Instruction::Pop(0),
+                Instruction::Unwind,
+            ],
         )
     }
 
@@ -611,6 +669,21 @@ mod test_compilation {
                 Instruction::Unwind,
             ],
         )
+    }
+}
+
+#[cfg(test)]
+mod test_misc {
+    use super::*;
+
+    #[test]
+    fn test_dedup() {
+        let v = [(ast::Name::new("i"), 1), (ast::Name::new("i"), 2usize)]
+            .into_iter()
+            .dedup_by(|l, r| l.0 == r.0)
+            .map(|(_, r)| r)
+            .collect::<Vec<_>>();
+        assert_eq!(v, vec![1]);
     }
 }
 

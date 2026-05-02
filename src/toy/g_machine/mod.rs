@@ -36,8 +36,7 @@ enum Node {
     Num(i64),
     Ap(Addr, Addr),
     Global(usize, Rc<Code>),
-    Indirect(Addr),
-    Dummy,
+    Indirect(Option<Addr>),
 }
 
 #[derive(Debug, Clone, Getters)]
@@ -230,7 +229,7 @@ impl Machine {
             bail!("infinite loop: {:?}", root_addr)
         }
 
-        self.replace_node_at(node_to_update_addr, Node::Indirect(root_addr));
+        self.replace_node_at(node_to_update_addr, Node::Indirect(Some(root_addr)));
 
         Ok(InstrPtrNext::Advance)
     }
@@ -285,20 +284,19 @@ impl Machine {
                 InstrPtrNext::Stay
             }
             Node::Indirect(indirect_addr) => {
-                let indirect_addr = *indirect_addr;
+                let indirect_addr = indirect_addr.expect(
+                    "BUG: null address in indirect node, incomplete template instantiation?",
+                );
                 assert_eq!(self.stack.pop_cloned().unwrap(), addr);
                 self.stack.push(indirect_addr);
                 InstrPtrNext::Stay
-            }
-            Node::Dummy => {
-                panic!("BUG: dummy node while unwinding, incomplete instantiation?")
             }
         })
     }
 
     fn handle_alloc(&mut self, n: usize) -> Result<InstrPtrNext> {
         (0..n).try_for_each(|_| {
-            let addr = self.heap.alloc(Node::Dummy);
+            let addr = self.heap.alloc(Node::Indirect(None));
             self.stack.push(addr);
             Ok(())
         })?;
@@ -352,7 +350,7 @@ impl Machine {
     fn follow_indirect(&mut self, a: Addr) -> Addr {
         let mut next = a;
         while let Node::Indirect(a) = self.must_access_node(next) {
-            next = *a
+            next = a.expect("BUG: null addr encountered while following indirection, incomplete template instantiation?")
         }
         next
     }

@@ -3,6 +3,20 @@ use bit_set::BitSet;
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Addr(usize);
 
+impl Addr {
+    fn new(idx: usize) -> Self {
+        Self(idx + 1)
+    }
+
+    fn un_addr(self) -> usize {
+        self.0 - 1
+    }
+
+    pub fn null() -> Self {
+        Self(0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Heap<T> {
     storage: Vec<T>,
@@ -21,18 +35,22 @@ impl<T> Heap<T> {
         let holes = self.holes.clone();
         (0..self.storage.len())
             .filter(move |x| !holes.contains(*x))
-            .map(Addr)
+            .map(Addr::new)
     }
 
     pub fn alloc(&mut self, e: T) -> Addr {
         match self.holes.iter().next() {
-            Some(addr) => {
-                self.storage[addr] = e;
-                self.holes.remove(addr);
-                Addr(addr)
+            Some(idx) => {
+                self.storage[idx] = e;
+                self.holes.remove(idx);
+                Addr::new(idx)
             }
             None => {
-                let addr = Addr(self.storage.len());
+                let idx = self.storage.len();
+                if idx == usize::MAX {
+                    panic!("exceeding max allocation size")
+                }
+                let addr = Addr::new(idx);
                 self.storage.push(e);
                 addr
             }
@@ -40,23 +58,26 @@ impl<T> Heap<T> {
     }
 
     pub fn free(&mut self, addr: Addr) {
-        self.holes.insert(addr.0);
+        self.holes.insert(addr.un_addr());
+    }
+
+    fn access_check(&self, addr: Addr) -> Option<usize> {
+        let idx = addr.un_addr();
+        if addr == Addr::null() || idx >= self.storage.len() || self.holes.contains(idx) {
+            None
+        } else {
+            Some(idx)
+        }
     }
 
     pub fn access(&self, addr: Addr) -> Option<&T> {
-        if addr.0 >= self.storage.len() || self.holes.contains(addr.0) {
-            None
-        } else {
-            self.storage.get(addr.0)
-        }
+        self.access_check(addr)
+            .map(|idx| self.storage.get(idx).unwrap())
     }
 
     pub fn access_mut(&mut self, addr: Addr) -> Option<&mut T> {
-        if addr.0 >= self.storage.len() || self.holes.contains(addr.0) {
-            None
-        } else {
-            self.storage.get_mut(addr.0)
-        }
+        self.access_check(addr)
+            .map(|idx| self.storage.get_mut(idx).unwrap())
     }
 
     pub fn size(&self) -> usize {

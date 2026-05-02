@@ -27,6 +27,7 @@ enum Instruction {
     Update(usize),
     Pop(usize),
     Alloc(usize),
+    Slide(usize),
 }
 
 type Code = Vec<Instruction>;
@@ -175,6 +176,7 @@ impl Machine {
             Instruction::Update(n) => self.handle_update(*n).context("Update"),
             Instruction::Pop(n) => self.handle_pop(*n).context("Pop"),
             Instruction::Alloc(n) => self.handle_alloc(*n).context("Alloc"),
+            Instruction::Slide(n) => self.handle_slide(*n).context("Slide"),
         }
     }
 
@@ -299,6 +301,18 @@ impl Machine {
             Ok(())
         })?;
 
+        Ok(InstrPtrNext::Advance)
+    }
+
+    fn handle_slide(&mut self, n: usize) -> Result<InstrPtrNext> {
+        let addr = self.stack.pop_cloned().expect("BUG: slide on empty stack");
+        let n_popped = self.stack.pop_n(n).len();
+        assert_eq!(
+            n_popped, n,
+            "BUG: attempted to slide {}, but only got {} on the stack",
+            n, n_popped
+        );
+        self.stack.push(addr);
         Ok(InstrPtrNext::Advance)
     }
 

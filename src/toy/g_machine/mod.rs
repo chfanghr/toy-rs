@@ -162,7 +162,7 @@ impl Machine {
     pub fn setup_to_run(&mut self, entry_point: ast::Name) {
         self.load_code(Rc::new(vec![
             Instruction::PushGlobal(entry_point),
-            Instruction::Unwind,
+            Instruction::Eval,
         ]));
         self.stack.reset();
         self.stats = Stats::new();

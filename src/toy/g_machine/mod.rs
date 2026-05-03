@@ -5,15 +5,15 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
-use chumsky::container::Container;
 use derive_getters::Getters;
 use intmap::IntMap;
 use itertools::Itertools;
+use monoid::Monoid;
 
 use crate::{
     parser::{
         ast::{self, Program},
-        must_lex_and_parse_sc,
+        must_lex_and_parse_sc, PRIM_ADD_NAME,
     },
     utils::{
         heap::{Addr, Heap},
@@ -34,6 +34,8 @@ enum Instruction {
     Pop(usize),
     Alloc(usize),
     Slide(usize),
+    Eval,
+    Add,
 }
 
 type Code = Vec<Instruction>;
@@ -68,6 +70,13 @@ enum InstrPtrNext {
     Advance,
 }
 
+#[derive(Debug, Clone)]
+struct DumpElem {
+    code: Rc<Code>,
+    instr_ptr: usize,
+    stack: Stack<Addr>,
+}
+
 #[derive(Debug, Clone, Getters)]
 pub struct Machine {
     #[getter(skip)]
@@ -76,6 +85,8 @@ pub struct Machine {
     instr_ptr: usize,
     #[getter(skip)]
     stack: Stack<Addr>,
+    #[getter(skip)]
+    dump: LinkedList<DumpElem>,
     #[getter(skip)]
     heap: Heap<Node>,
     #[getter(skip)]
@@ -131,6 +142,7 @@ impl Machine {
             code: Rc::new(vec![]),
             instr_ptr: 0,
             stack: Stack::new(),
+            dump: LinkedList::new(),
             heap,
             globals,
             integers: IntMap::new(),
@@ -183,11 +195,13 @@ impl Machine {
             Instruction::Pop(n) => self.handle_pop(*n).context("Pop"),
             Instruction::Alloc(n) => self.handle_alloc(*n).context("Alloc"),
             Instruction::Slide(n) => self.handle_slide(*n).context("Slide"),
+            Instruction::Eval => self.handle_eval(),
+            Instruction::Add => self.handle_add(),
         }
     }
 
     fn handle_push_global(&mut self, name: &ast::Name) -> Result<InstrPtrNext> {
-        let addr = self.lookup_global(&name)?;
+        let addr = self.lookup_global(name)?;
         self.stack.push(addr);
         Ok(InstrPtrNext::Advance)
     }
@@ -263,7 +277,14 @@ impl Machine {
             .expect("COMPILER BUG: trying to unwind an empty stack");
 
         Ok(match self.must_access_node(addr) {
-            Node::Num(_) => InstrPtrNext::Advance,
+            Node::Num(_) => {
+                if self.restore_context() {
+                    self.stack.push(addr);
+                    InstrPtrNext::Stay
+                } else {
+                    InstrPtrNext::Advance
+                }
+            }
             Node::Ap(l, _) => {
                 self.stack.push(*l);
                 InstrPtrNext::Stay
@@ -322,6 +343,37 @@ impl Machine {
         Ok(InstrPtrNext::Advance)
     }
 
+    fn handle_eval(&mut self) -> Result<InstrPtrNext> {
+        let addr = self
+            .stack
+            .pop_cloned()
+            .expect("BUG: attempted to evaluate an empty stack");
+        self.save_context();
+        self.load_code(Rc::new(vec![Instruction::Unwind]));
+        self.stack.push(addr);
+        Ok(InstrPtrNext::Stay)
+    }
+
+    fn handle_add(&mut self) -> Result<InstrPtrNext> {
+        let l = self
+            .stack
+            .pop_cloned()
+            .expect("BUG: unable to extract l while executing add instruction");
+        let r = self
+            .stack
+            .pop_cloned()
+            .expect("BUG: unable to extract r while executing add instruction");
+
+        let res = match (self.must_access_node(l), self.must_access_node(r)) {
+            (Node::Num(l), Node::Num(r)) => l + r,
+            _ => panic!("BUG: add expect the two operands to both be in WHNF"),
+        };
+
+        let addr = self.alloc_num_node(res);
+        self.stack.push(addr);
+        Ok(InstrPtrNext::Advance)
+    }
+
     fn must_extract_ap_node_r(&self, addr: Addr) -> Addr {
         let node = self.must_access_node(addr);
         let r = if let Node::Ap(_, r) = node {
@@ -375,17 +427,68 @@ impl Machine {
         next
     }
 
+    fn save_context(&mut self) {
+        let code = mem::replace(&mut self.code, Rc::new(vec![]));
+        let instr_ptr = mem::replace(&mut self.instr_ptr, 0) + 1;
+        let stack = mem::replace(&mut self.stack, Stack::new());
+
+        let dump_elem = DumpElem {
+            code,
+            instr_ptr,
+            stack,
+        };
+
+        self.dump.push_front(dump_elem);
+    }
+
+    fn restore_context(&mut self) -> bool {
+        if let Some(DumpElem {
+            code,
+            instr_ptr,
+            stack,
+        }) = self.dump.pop_front()
+        {
+            self.code = code;
+            self.instr_ptr = instr_ptr;
+            self.stack = stack;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn history(self) -> MachineHistoryIter {
         MachineHistoryIter::new(self)
     }
 }
 
-fn prelude_ski() -> Vec<ast::SuperCombinator<ast::Name>> {
-    vec![
+fn prelude_ski() -> ast::Program<ast::Name> {
+    ast::Program(vec![
         must_lex_and_parse_sc("i x = x"),
         must_lex_and_parse_sc("k x y = x"),
         must_lex_and_parse_sc("s f g x = f x (g x)"),
-    ]
+    ])
+}
+
+fn compiled_prelude_ski() -> CompiledProgram {
+    compile_program(prelude_ski()).unwrap()
+}
+
+fn compiled_primitive_wrappers() -> CompiledProgram {
+    CompiledProgram(vec![CompiledSuperCombinator {
+        name: ast::Name::new(PRIM_ADD_NAME),
+        n_args: 2,
+        code: vec![
+            Instruction::Push(0),
+            Instruction::Eval,
+            Instruction::Push(2),
+            Instruction::Eval,
+            Instruction::Add,
+            Instruction::Update(2),
+            Instruction::Pop(2),
+            Instruction::Unwind,
+        ],
+    }])
 }
 
 fn build_initial_heap(program: CompiledProgram) -> Result<(Heap<Node>, Assoc<ast::Name, Addr>)> {
@@ -402,11 +505,32 @@ fn build_initial_heap(program: CompiledProgram) -> Result<(Heap<Node>, Assoc<ast
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledProgram(Vec<CompiledSuperCombinator>);
 
-pub fn compile_program(prog: Program<ast::Name>) -> Result<CompiledProgram> {
+impl Monoid for CompiledProgram {
+    fn id() -> Self {
+        Self(vec![])
+    }
+
+    fn op(self, other: Self) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .chain(other.0)
+                .dedup_by(|l, r| l.name == r.name)
+                .collect(),
+        )
+    }
+}
+
+pub fn compile_program_with_prelude(prog: Program<ast::Name>) -> Result<CompiledProgram> {
+    compile_program(prog).map(|c| {
+        c.op(compiled_prelude_ski())
+            .op(compiled_primitive_wrappers())
+    })
+}
+
+fn compile_program(prog: Program<ast::Name>) -> Result<CompiledProgram> {
     Ok(CompiledProgram(
         prog.0
-            .into_iter()
-            .chain(prelude_ski())
             .into_iter()
             .dedup_by(|l, r| l.name == r.name)
             .map(compile_sc)
@@ -581,13 +705,13 @@ mod test_machine {
     use super::*;
     use crate::parser::must_lex_and_parse_sc;
 
-    #[test]
-    fn test_ski() {
-        let main = "main = s k k (i 3)";
-        let program = ast::Program(vec![must_lex_and_parse_sc(main)]);
-        let compiled_program = compile_program(program).unwrap();
+    fn run_expr(expr: &str) -> Machine {
+        let entry_point = "main";
+        let program = format!("{} = {}", entry_point, expr);
+        let program = ast::Program(vec![must_lex_and_parse_sc(program)]);
+        let compiled_program = compile_program_with_prelude(program).unwrap();
         let mut machine = Machine::new(compiled_program).unwrap();
-        machine.setup_to_run(ast::Name::new("main"));
+        machine.setup_to_run(ast::Name::new(entry_point));
         let h = machine.history();
         let machine_end = h
             .map(|m| {
@@ -597,11 +721,25 @@ mod test_machine {
             .last()
             .unwrap()
             .unwrap();
+        machine_end
+    }
+
+    fn assert_machine_done(machine_end: Machine, expected_top_node: Node) {
         assert_eq!(machine_end.stack.height(), 1);
         let top_addr = machine_end.stack.peak().unwrap();
         let top_node = machine_end.must_access_node(*top_addr);
-        assert_eq!(top_node, &Node::Num(3));
+        assert_eq!(top_node, &expected_top_node);
         eprintln!("stats: {:?}", machine_end.stats());
+    }
+
+    #[test]
+    fn test_add() {
+        assert_machine_done(run_expr("i 1 + s k k 1 + 40"), Node::Num(42));
+    }
+
+    #[test]
+    fn test_ski() {
+        assert_machine_done(run_expr("s k k (i 3)"), Node::Num(3));
     }
 }
 

@@ -31,7 +31,7 @@ impl<T> Heap<T> {
         }
     }
 
-    pub fn addresses(&self) -> impl Iterator<Item = Addr> {
+    pub fn addresses(&self) -> impl Iterator<Item = Addr> + 'static {
         let holes = self.holes.clone();
         (0..self.storage.len())
             .filter(move |x| !holes.contains(*x))

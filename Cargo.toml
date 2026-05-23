@@ -1,6 +1,6 @@
 [package]
 authors = ["Hongrui Fang <chfanghr@gmail.com>"]
-edition = "2021"
+edition = "2024"
 # If you change the name here, you must also do it in flake.nix (and run `cargo generate-lockfile` afterwards)
 name = "toy"
 description = "A simple Rust project using Nix"

@@ -1,11 +1,13 @@
+use std::rc::Rc;
+
 use monoid::Monoid;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
-pub struct Name(pub String);
+pub struct Name(pub Rc<String>);
 
 impl Name {
     pub fn new(name: impl ToString) -> Name {
-        Name(name.to_string())
+        Name(Rc::new(name.to_string()))
     }
 }
 

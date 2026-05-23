@@ -3,10 +3,11 @@ pub mod tokens;
 use std::iter;
 
 use chumsky::{
+    IterParser, Parser,
     error::Cheap,
     extra,
     prelude::{any, choice, end, just},
-    text, IterParser, Parser,
+    text,
 };
 use itertools::Either;
 

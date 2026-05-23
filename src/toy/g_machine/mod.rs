@@ -4,7 +4,9 @@ use std::{
     rc::Rc,
 };
 
-use anyhow::{anyhow, bail, Context, Ok, Result};
+mod compiler;
+
+use anyhow::{Context, Ok, Result, anyhow, bail};
 use derive_getters::Getters;
 use intmap::IntMap;
 use itertools::Itertools;
@@ -12,8 +14,9 @@ use monoid::Monoid;
 
 use crate::{
     parser::{
+        PRIM_ADD_NAME,
         ast::{self, Program},
-        must_lex_and_parse_sc, PRIM_ADD_NAME,
+        must_lex_and_parse_sc,
     },
     utils::{
         heap::{Addr, Heap},
@@ -36,6 +39,7 @@ enum Instruction {
     Slide(usize),
     Eval,
     Add,
+    Branch(Box<Code>, Box<Code>),
 }
 
 type Code = Vec<Instruction>;
@@ -197,6 +201,7 @@ impl Machine {
             Instruction::Slide(n) => self.handle_slide(*n).context("Slide"),
             Instruction::Eval => self.handle_eval(),
             Instruction::Add => self.handle_add(),
+            Instruction::Branch(instructions, instructions1) => todo!(),
         }
     }
 

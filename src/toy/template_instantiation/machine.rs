@@ -1,12 +1,12 @@
 use super::prelude::extended_prelude;
 use crate::{
     parser::{
-        ast, prelude, PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME,
-        PRIM_MUL_NAME, PRIM_SUB_NAME,
+        PRIM_ADD_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME, PRIM_GT_NAME, PRIM_LT_NAME, PRIM_MUL_NAME,
+        PRIM_SUB_NAME, ast, prelude,
     },
     utils::{assoc::Assoc, heap::Addr, heap::Heap, stack::Stack},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use log::{debug, trace};
 use std::{cmp::max, collections::LinkedList, mem::replace};
 

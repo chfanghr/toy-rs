@@ -1,5 +1,5 @@
 use super::machine::PrimOpKind;
-use crate::parser::{ast, must_lex_and_parse_sc, PRIM_BOOLEAN_AND_NAME, PRIM_NE_NAME};
+use crate::parser::{PRIM_BOOLEAN_AND_NAME, PRIM_NE_NAME, ast, must_lex_and_parse_sc};
 
 pub(super) const FALSE_TAG: u64 = 0;
 pub(super) const TRUE_TAG: u64 = 1;

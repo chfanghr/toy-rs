@@ -1,12 +1,12 @@
 pub mod ast;
 
 use chumsky::{
+    IterParser, Parser,
     error::Cheap,
     extra,
     pratt::{infix, left, none, right},
-    prelude::{any, choice, end, just, recursive, Recursive},
+    prelude::{Recursive, any, choice, end, just, recursive},
     recursive::Direct,
-    IterParser, Parser,
 };
 
 use crate::{
@@ -27,6 +27,7 @@ pub const PRIM_ADD_NAME: &'static str = "_prim_add";
 pub const PRIM_SUB_NAME: &'static str = "_prim_sub";
 pub const PRIM_MUL_NAME: &'static str = "_prim_mul";
 pub const PRIM_DIV_NAME: &'static str = "_prim_div";
+pub const PRIM_NEG: &'static str = "_prim_neg";
 
 pub fn must_lex_and_parse_sc(inp: impl AsRef<str>) -> SuperCombinator<Name> {
     lexer::token_vec()
@@ -60,8 +61,8 @@ fn program<'src>() -> impl Parser<'src, &'src [Token], Program<Name>, extra::Err
 }
 
 // sc -> var var_1 .... var_n = expr where n >= 0
-fn super_comb<'src>(
-) -> impl Parser<'src, &'src [Token], SuperCombinator<Name>, extra::Err<Cheap>> + Clone {
+fn super_comb<'src>()
+-> impl Parser<'src, &'src [Token], SuperCombinator<Name>, extra::Err<Cheap>> + Clone {
     var()
         .then(var().repeated().collect::<Vec<_>>())
         .then_ignore(just_symbol(Symbol::Bind))

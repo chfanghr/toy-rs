@@ -1,6 +1,6 @@
 use super::{machine::*, prelude::*};
 use crate::utils::heap::Addr;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use itertools::{Either, Itertools};
 
 impl Machine {

@@ -5,8 +5,7 @@ use chumsky::{
     error::Cheap,
     extra,
     pratt::{infix, left, none, right},
-    prelude::{Recursive, any, choice, end, just, recursive},
-    recursive::Direct,
+    prelude::{any, choice, end, just, recursive},
 };
 
 use crate::{
@@ -158,9 +157,9 @@ aexpr -> var
        | Pack{num, num}
        | (expr)
 */
-fn aexpr<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn aexpr<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, Expr<Name>> {
     choice((
         var().map(Expr::Var),
         num().map(Expr::Num),
@@ -248,9 +247,9 @@ fn expr<'src>() -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap
 // let defns in expr
 // letrec defns in expr
 // defns -> defn_1 ; ... ; defn_n where n >= 1
-fn let_in<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], Let<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn let_in<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, Let<Name>> {
     let is_rec = (just_keyword(Keyword::Let).to(false)).or(just_keyword(Keyword::Letrec).to(true));
     let defns = bind(expr.clone())
         .separated_by(just_symbol(Symbol::Semicolon))
@@ -268,9 +267,9 @@ fn let_in<'src: 'b, 'b>(
 }
 
 // defn -> var = expr
-fn bind<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], Bind<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn bind<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, Bind<Name>> {
     var()
         .then_ignore(just_symbol(Symbol::Bind))
         .then(expr)
@@ -279,9 +278,9 @@ fn bind<'src: 'b, 'b>(
 
 // case expr of branches
 // branch -> branch_1 ; ... ; branch_n where n >= 1
-fn case_of<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], Case<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn case_of<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, Case<Name>> {
     just_keyword(Keyword::Case)
         .ignore_then(expr.clone())
         .then_ignore(just_keyword(Keyword::Of))
@@ -295,9 +294,9 @@ fn case_of<'src: 'b, 'b>(
 }
 
 // branch -> <num> var_1, ... , var_n -> expr where n >= 0
-fn branch<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], Branch<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn branch<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, Branch<Name>> {
     let tag = num_token()
         .delimited_by(just_symbol(Symbol::LBracket), just_symbol(Symbol::RBracket))
         .map(Tag);
@@ -314,9 +313,9 @@ fn branch<'src: 'b, 'b>(
 }
 
 // \var_1 ... var_n -> expr where n >= 1
-fn lambda<'src: 'b, 'b>(
-    expr: Recursive<Direct<'src, 'b, &'src [Token], Expr<Name>, extra::Err<Cheap>>>,
-) -> impl Parser<'src, &'src [Token], LamdaAbstraction<Name>, extra::Err<Cheap>> + 'b + Clone {
+fn lambda<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, LamdaAbstraction<Name>> {
     just_symbol(Symbol::Backslash)
         .ignore_then(var().repeated().at_least(1).collect::<Vec<_>>())
         .then_ignore(just_symbol(Symbol::Arrow))
@@ -352,58 +351,64 @@ mod tests {
 
     use super::*;
 
-    // FIXME: figure out the lifetime
-    // fn must_lex(input: &str) -> Vec<Token> {
-    //     lexer::token_vec().parse(input).unwrap()
-    // }
+    fn must_lex(input: &str) -> Vec<Token> {
+        lexer::token_vec().parse(input).into_result().unwrap()
+    }
 
-    // fn must_parse<'src, P, O>(parser: P, tokens: &'src [Token]) -> O
-    // where
-    //     P: Parser<'src, &'src [Token], O, extra::Err<Cheap>>,
-    // {
-    //     parser.parse(&tokens).unwrap()
-    // }
+    fn must_parse<'src, P, O>(parser: P, tokens: &'src [Token]) -> O
+    where
+        P: Parser<'src, &'src [Token], O, extra::Err<Cheap>>,
+    {
+        parser.parse(tokens).into_result().unwrap()
+    }
 
-    // fn must_lex_and_parse<P, O>(parser: P, input: &str) -> O
-    // where
-    //     P: for<'a> Parser<'a, &'a [Token], O, extra::Err<Cheap>>,
-    // {
-    //     let tokens = must_lex(input);
-    //     let ast = must_parse(parser, tokens.as_slice());
-    //     ast
-    // }
+    macro_rules! assert_parse {
+        ($parser:expr, $expected:expr, $input:expr) => {{
+            let tokens = must_lex($input);
+            assert_eq!(must_parse($parser, tokens.as_slice()), $expected);
+        }};
+    }
 
     #[test]
     fn test_constr() {
-        let input: Vec<Token> = vec![
-            Token::Keyword(Keyword::Pack),
-            Token::Symbol(Symbol::LCurlyBrace),
-            Token::Num(0),
-            Token::Symbol(Symbol::Comma),
-            Token::Num(0),
-            Token::Symbol(Symbol::RCurlyBrace),
-        ];
-        assert_eq!(
-            constr().parse(&input).into_result(),
-            Ok(Constructor {
+        assert_parse!(
+            constr(),
+            Constructor {
                 tag: Tag(0),
                 arity: Arity(0),
-            }),
+            },
+            "Pack{0,0}"
         );
     }
 
     #[test]
-    fn test_parser() {
-        let res = lexer::token_vec()
-            .parse(
-                "main = i (i (i 4)); 
-                 i x = x; 
-                 neg = _prim_neg;
-                 blah = if true then 42 else 69
-                ",
-            )
-            .into_result()
-            .and_then(|tokens| parser().parse(&tokens).into_result());
-        println!("{:?}", res);
+    fn test_if_then_else() {
+        assert_parse!(
+            if_then_else(expr()),
+            IfThenElse {
+                pred: Expr::Var(Name::new("true")),
+                then_branch: Expr::Num(Integer(42)),
+                else_branch: Expr::Num(Integer(0))
+            },
+            "if true then 42 else 0"
+        );
+    }
+
+    #[test]
+    fn test_ap_chain() {
+        assert_parse!(
+            expr(),
+            Expr::Ap(Box::new(Application {
+                l: Expr::Var(Name::new("i")),
+                r: Expr::Ap(Box::new(Application {
+                    l: Expr::Var(Name::new("i")),
+                    r: Expr::Ap(Box::new(Application {
+                        l: Expr::Var(Name::new("i")),
+                        r: Expr::Num(Integer(42))
+                    }))
+                }))
+            })),
+            "i(i (i 42))"
+        );
     }
 }

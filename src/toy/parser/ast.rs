@@ -65,6 +65,13 @@ pub struct LamdaAbstraction<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfThenElse<T> {
+    pub pred: Expr<T>,
+    pub then_branch: Expr<T>,
+    pub else_branch: Expr<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr<T> {
     Var(Name),
     Num(Integer),
@@ -73,6 +80,7 @@ pub enum Expr<T> {
     Let(Box<Let<T>>),
     Case(Box<Case<T>>),
     Lam(Box<LamdaAbstraction<T>>),
+    IfThenElse(Box<IfThenElse<T>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,5 +100,24 @@ impl<T> Monoid for Program<T> {
 
     fn op(self, other: Self) -> Self {
         Self(self.0.into_iter().chain(other.0).collect())
+    }
+}
+
+pub fn ap_chain(exprs: Vec<Expr<Name>>) -> Expr<Name> {
+    match exprs.len() {
+        0 => panic!("BUG: misused ap_chain: must provide more than one expr"),
+        1 => {
+            let [expr] = exprs.try_into().unwrap();
+            expr
+        }
+        _ => {
+            let mut exprs = exprs;
+            let [x1, x2] = exprs.drain(..2).collect::<Vec<_>>().try_into().unwrap();
+            let xs = exprs;
+            xs.into_iter().fold(
+                Expr::Ap(Box::new(Application { l: x1, r: x2 })),
+                |inner, x| Expr::Ap(Box::new(Application { l: inner, r: x })),
+            )
+        }
     }
 }

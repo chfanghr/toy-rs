@@ -6,6 +6,9 @@ pub enum Keyword {
     Case,   // case
     Of,     // of
     Pack,   // Pack
+    If,
+    Then,
+    Else,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

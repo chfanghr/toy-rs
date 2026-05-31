@@ -32,6 +32,9 @@ fn var_or_keyword<'src>() -> impl Parser<'src, &'src str, Either<Keyword, String
                 "case" => Some(Case),
                 "of" => Some(Of),
                 "Pack" => Some(Pack),
+                "if" => Some(If),
+                "then" => Some(Then),
+                "else" => Some(Else),
                 _ => None,
             };
             kw.map(Either::Left).unwrap_or(Either::Right(full))
@@ -131,6 +134,7 @@ mod test {
                         (ifThenElse (l > r) gt lt);
                  main = let x = 1 + 1 + 0 / 1 * 2  in fix (k (i x));
                  neg = _prim_neg
+                 ifThenElse pred thenBranch elseBranch  = if pred then thenBranch else elseBranch
                 "
             )
         )

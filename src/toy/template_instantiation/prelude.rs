@@ -17,13 +17,13 @@ pub(super) fn extended_prelude() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc(format!("false = Pack{{{},0}}", FALSE_TAG)),
         must_lex_and_parse_sc(format!("true = Pack{{{},0}}", TRUE_TAG)),
         must_lex_and_parse_sc(format!(
-            "if = {}",
+            "_if = {}",
             PrimOpKind::IfThenElse.to_name().unwrap()
         )),
-        must_lex_and_parse_sc(format!("{} x y = if x y false", PRIM_BOOLEAN_AND_NAME)),
-        must_lex_and_parse_sc(format!("{} x y = if x true y", PRIM_BOOLEAN_AND_NAME)),
-        must_lex_and_parse_sc("not x = if x false true"),
-        must_lex_and_parse_sc("xor x y = if x (not y) y"),
+        must_lex_and_parse_sc(format!("{} x y = _if x y false", PRIM_BOOLEAN_AND_NAME)),
+        must_lex_and_parse_sc(format!("{} x y = _if x true y", PRIM_BOOLEAN_AND_NAME)),
+        must_lex_and_parse_sc("not x = _if x false true"),
+        must_lex_and_parse_sc("xor x y = _if x (not y) y"),
         must_lex_and_parse_sc(format!("{} x y = not ({} x y)", PRIM_NE_NAME, PRIM_NE_NAME)),
         must_lex_and_parse_sc(format!("{} x y = (x < y) || (x == y) ", PRIM_NE_NAME)),
         must_lex_and_parse_sc(format!("{} x y = (x > y) || (x == y) ", PRIM_NE_NAME)),

@@ -148,6 +148,17 @@ impl Machine {
                     c.arity.0 as usize,
                 )))),
             )),
+            // HACK: could we instantiate directly please
+            ast::Expr::IfThenElse(i) => {
+                let i = i.clone();
+                let expr = ast::ap_chain(vec![
+                    ast::Expr::Var(ast::Name::new(PrimOpKind::IfThenElse.to_name().unwrap())),
+                    i.pred,
+                    i.then_branch,
+                    i.else_branch,
+                ]);
+                self.instantiate(env, &expr, replace_at)
+            }
             // FIXME
             e => panic!("BUG: cannot instantiate this variant yet: {:?}", e),
         }

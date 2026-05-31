@@ -29,6 +29,8 @@ pub const PRIM_MUL_NAME: &'static str = "_prim_mul";
 pub const PRIM_DIV_NAME: &'static str = "_prim_div";
 pub const PRIM_NEG: &'static str = "_prim_neg";
 
+trait TokenStreamParser<'src, O> = Parser<'src, &'src [Token], O, extra::Err<Cheap>> + Clone;
+
 pub fn must_lex_and_parse_sc(inp: impl AsRef<str>) -> SuperCombinator<Name> {
     lexer::token_vec()
         .parse(inp.as_ref())
@@ -234,6 +236,9 @@ fn expr<'src>() -> impl Parser<'src, &'src [Token], Expr<Name>, extra::Err<Cheap
             let_in(this.clone()).map(apply_boxed(Expr::Let)).boxed(),
             case_of(this.clone()).map(apply_boxed(Expr::Case)).boxed(),
             lambda(this.clone()).map(apply_boxed(Expr::Lam)).boxed(),
+            if_then_else(this.clone())
+                .map(apply_boxed(Expr::IfThenElse))
+                .boxed(),
             ops,
             aexpr_chain,
         ))
@@ -319,23 +324,21 @@ fn lambda<'src: 'b, 'b>(
         .map(|(arguments, body)| LamdaAbstraction { arguments, body })
 }
 
-fn ap_chain(exprs: Vec<Expr<Name>>) -> Expr<Name> {
-    match exprs.len() {
-        0 => panic!("BUG: misused ap_chain: must provide more than one expr"),
-        1 => {
-            let [expr] = exprs.try_into().unwrap();
-            expr
-        }
-        _ => {
-            let mut exprs = exprs;
-            let [x1, x2] = exprs.drain(..2).collect::<Vec<_>>().try_into().unwrap();
-            let xs = exprs;
-            xs.into_iter().fold(
-                Expr::Ap(Box::new(Application { l: x1, r: x2 })),
-                |inner, x| Expr::Ap(Box::new(Application { l: inner, r: x })),
-            )
-        }
-    }
+// if expr then expr else expr
+fn if_then_else<'src>(
+    expr: impl TokenStreamParser<'src, Expr<Name>>,
+) -> impl TokenStreamParser<'src, IfThenElse<Name>> {
+    just_keyword(Keyword::If)
+        .ignore_then(expr.clone())
+        .then_ignore(just_keyword(Keyword::Then))
+        .then(expr.clone())
+        .then_ignore(just_keyword(Keyword::Else))
+        .then(expr)
+        .map(|((pred, then_branch), else_branch)| IfThenElse {
+            pred,
+            then_branch,
+            else_branch,
+        })
 }
 
 fn apply_boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
@@ -344,9 +347,31 @@ fn apply_boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
 
 #[cfg(test)]
 mod tests {
+
     use crate::lexer;
 
     use super::*;
+
+    // FIXME: figure out the lifetime
+    // fn must_lex(input: &str) -> Vec<Token> {
+    //     lexer::token_vec().parse(input).unwrap()
+    // }
+
+    // fn must_parse<'src, P, O>(parser: P, tokens: &'src [Token]) -> O
+    // where
+    //     P: Parser<'src, &'src [Token], O, extra::Err<Cheap>>,
+    // {
+    //     parser.parse(&tokens).unwrap()
+    // }
+
+    // fn must_lex_and_parse<P, O>(parser: P, input: &str) -> O
+    // where
+    //     P: for<'a> Parser<'a, &'a [Token], O, extra::Err<Cheap>>,
+    // {
+    //     let tokens = must_lex(input);
+    //     let ast = must_parse(parser, tokens.as_slice());
+    //     ast
+    // }
 
     #[test]
     fn test_constr() {
@@ -373,7 +398,8 @@ mod tests {
             .parse(
                 "main = i (i (i 4)); 
                  i x = x; 
-                 neg = _prim_neg
+                 neg = _prim_neg;
+                 blah = if true then 42 else 69
                 ",
             )
             .into_result()

@@ -1,4 +1,5 @@
 #![feature(try_blocks)]
+#![feature(trait_alias)]
 
 pub mod g_machine;
 pub mod lexer;

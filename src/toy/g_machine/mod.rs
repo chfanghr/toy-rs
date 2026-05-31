@@ -5,6 +5,7 @@ use std::{
 };
 
 mod compiler;
+mod instruction;
 
 use anyhow::{Context, Ok, Result, anyhow, bail};
 use derive_getters::Getters;

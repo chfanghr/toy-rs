@@ -9,7 +9,10 @@ use itertools::Either;
 
 use crate::{
     g_machine::compiler,
-    parser::{PRIM_ADD_NAME, PRIM_SUB_NAME, ast},
+    parser::{
+        PRIM_ADD_NAME, PRIM_EQ_NAME, PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME,
+        PRIM_SUB_NAME, ast,
+    },
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -25,6 +28,14 @@ enum Instruction {
     Slide(usize),
     Eval,
     Add,
+    Sub,
+    Mul,
+    Div,
+    EQ,
+    GT,
+    GE,
+    LT,
+    LE,
     Branch(Box<Code>, Box<Code>),
 }
 
@@ -96,7 +107,7 @@ fn r(d: usize, expr: &ast::Expr<ast::Name>, env: Env) -> Code {
     e(expr, env)
         .into_iter()
         .chain(iter::once(Instruction::Update(d)))
-        .chain(iter::once(Instruction::Pop(d)))
+        .chain((d != 0).then_some(Instruction::Pop(d)))
         .chain(iter::once(Instruction::Unwind))
         .collect()
 }
@@ -166,6 +177,12 @@ fn e_ap_2(
     let f = extract_var_expr(f)?;
     let ap_instr = match f.0.as_str() {
         PRIM_ADD_NAME => Some(Instruction::Add),
+        PRIM_SUB_NAME => Some(Instruction::Sub),
+        PRIM_EQ_NAME => Some(Instruction::EQ),
+        PRIM_GE_NAME => Some(Instruction::GE),
+        PRIM_GT_NAME => Some(Instruction::GT),
+        PRIM_LE_NAME => Some(Instruction::LE),
+        PRIM_LT_NAME => Some(Instruction::LT),
         _ => None,
     }?;
 
@@ -291,6 +308,10 @@ where
     }
 }
 
+fn alpha_reduction(expr: ast::Expr<ast::Name>) -> ast::Expr<ast::Name> {
+    todo!()
+}
+
 #[cfg(test)]
 mod test {
     use crate::parser::must_lex_and_parse_sc;
@@ -303,6 +324,7 @@ mod test {
         t("three = 1 + 1 + 1");
         t("four = 1 + i 1 + 1 + 1");
         t("addOne x = letrec y = _prim_if true x x in y + 1");
+        t("zero = 1 - i 1")
     }
 
     fn t(c: &str) {

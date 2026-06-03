@@ -1,18 +1,10 @@
-use std::{
-    collections::{BTreeMap, LinkedList, VecDeque},
-    iter::{self, once},
-    rc::Rc,
-};
+use std::{collections::BTreeMap, iter, rc::Rc};
 
-use chumsky::{container::Container, primitive::todo};
-use itertools::Either;
+use stacksafe::{StackSafe, stacksafe};
 
-use crate::{
-    g_machine::compiler,
-    parser::{
-        PRIM_ADD_NAME, PRIM_EQ_NAME, PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME,
-        PRIM_SUB_NAME, ast,
-    },
+use crate::parser::{
+    PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
+    PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_SUB_NAME, ast,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -36,7 +28,9 @@ enum Instruction {
     GE,
     LT,
     LE,
-    Branch(Box<Code>, Box<Code>),
+    BooleanAnd,
+    BooleanOr,
+    Branch(Rc<StackSafe<Code>>, Rc<StackSafe<Code>>),
 }
 
 type Code = Vec<Instruction>;
@@ -44,50 +38,6 @@ type Code = Vec<Instruction>;
 type Assoc<K, V> = BTreeMap<K, V>;
 
 type Env = Rc<Assoc<ast::Name, usize>>;
-
-// #[derive(Debug, Clone)]
-// enum CompilationTodo {
-//     ToCompile(ast::Expr<ast::Name>, Env),
-//     Done(Instruction),
-// }
-
-// #[derive(Debug, Clone)]
-// struct ExpressionCompiler {
-//     todo_stack: VecDeque<CompilationTodo>,
-//     code_output: Code,
-// }
-
-// impl ExpressionCompiler {
-//     fn push_todo(&mut self, todo: CompilationTodo) {
-//         self.todo_stack.push_back(todo);
-//     }
-
-//     fn pop_todo(&mut self) -> Option<CompilationTodo> {
-//         self.todo_stack.pop_back()
-//     }
-
-//     fn new(expr: ast::Expr<ast::Name>, env: Env) -> Self {
-//         let mut res = Self {
-//             todo_stack: VecDeque::new(),
-//             code_output: Code::new(),
-//         };
-
-//         res.push_todo(CompilationTodo::ToCompile(expr, env));
-
-//         res
-//     }
-
-// }
-
-// fn is_prim(name: &ast::Name) -> bool {
-//     todo!()
-// }
-
-// fn e_fallback(expr: ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
-//     let mut res = c(expr, env);
-//     res.push(Instruction::Eval);
-//     res
-// }
 
 fn sc(sc: &ast::SuperCombinator<ast::Name>) -> Code {
     let env = sc
@@ -112,11 +62,15 @@ fn r(d: usize, expr: &ast::Expr<ast::Name>, env: Env) -> Code {
         .collect()
 }
 
+#[stacksafe]
 fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
     match expr {
         ast::Expr::Num(i) => Some(compile_num(i)),
         ast::Expr::Ap(_) => e_ap(expr, env.clone()),
         ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, env.clone())),
+        ast::Expr::IfThenElse(if_then_else) => {
+            Some(mk_compile_if_then_else(e)(if_then_else, env.clone()))
+        }
         _ => None,
     }
     .unwrap_or_else(|| e_fallback(expr, env))
@@ -183,6 +137,10 @@ fn e_ap_2(
         PRIM_GT_NAME => Some(Instruction::GT),
         PRIM_LE_NAME => Some(Instruction::LE),
         PRIM_LT_NAME => Some(Instruction::LT),
+        PRIM_BOOLEAN_AND_NAME => Some(Instruction::BooleanAnd),
+        PRIM_BOOLEAN_OR_NAME => Some(Instruction::BooleanOr),
+        PRIM_DIV_NAME => Some(Instruction::Div),
+        PRIM_MUL_NAME => Some(Instruction::Mul),
         _ => None,
     }?;
 
@@ -206,8 +164,8 @@ fn e_ap_3(
             let res = pred_code
                 .into_iter()
                 .chain(iter::once(Instruction::Branch(
-                    Box::new(then_branch_code),
-                    Box::new(else_branch_code),
+                    Rc::new(StackSafe::new(then_branch_code)),
+                    Rc::new(StackSafe::new(else_branch_code)),
                 )))
                 .collect();
             Some(res)
@@ -216,6 +174,7 @@ fn e_ap_3(
     }
 }
 
+#[stacksafe]
 fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
     match expr {
         ast::Expr::Var(name) => vec![
@@ -226,6 +185,7 @@ fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
         ast::Expr::Num(i) => compile_num(i),
         ast::Expr::Ap(ap) => mk_compile_ap_raw(c, Instruction::MkAp)(&ap.l, &ap.r, env),
         ast::Expr::Let(l) => mk_compile_let(c, c)(&l, env),
+        ast::Expr::IfThenElse(if_then_else) => mk_compile_if_then_else(c)(if_then_else, env),
         expr => todo!("cannot compile this expr: {:?}", expr),
     }
 }
@@ -308,29 +268,203 @@ where
     }
 }
 
-fn alpha_reduction(expr: ast::Expr<ast::Name>) -> ast::Expr<ast::Name> {
-    todo!()
+fn mk_compile_if_then_else<F>(compile: F) -> impl Fn(&ast::IfThenElse<ast::Name>, Env) -> Code
+where
+    F: Fn(&ast::Expr<ast::Name>, Env) -> Code,
+{
+    move |if_then_else, env| {
+        let pred_code = compile(&if_then_else.pred, env.clone());
+        let then_branch_code = compile(&if_then_else.then_branch, env.clone());
+        let else_branch_code = compile(&if_then_else.else_branch, env);
+
+        let res = pred_code
+            .into_iter()
+            .chain(iter::once(Instruction::Branch(
+                Rc::new(StackSafe::new(then_branch_code)),
+                Rc::new(StackSafe::new(else_branch_code)),
+            )))
+            .collect();
+
+        res
+    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::parser::must_lex_and_parse_sc;
 
-    use super::*;
+    use super::{Instruction::*, *};
 
-    #[test]
-    fn tt() {
-        t("two = 1 + 1");
-        t("three = 1 + 1 + 1");
-        t("four = 1 + i 1 + 1 + 1");
-        t("addOne x = letrec y = _prim_if true x x in y + 1");
-        t("zero = 1 - i 1")
+    fn assert_instr_sequence_test(inp: &str, expected: Vec<Instruction>) {
+        let sc_ast = must_lex_and_parse_sc(inp);
+        let actual = sc(&sc_ast);
+        assert_eq!(actual, expected, "compiling {}", inp)
     }
 
-    fn t(c: &str) {
-        let ast = must_lex_and_parse_sc(c);
-        println!("{:?}", ast);
-        let code = sc(&ast);
-        println!("{:?}", code);
+    #[test]
+    fn sc_prim_ad() {
+        assert_instr_sequence_test(
+            "_prim_add x y = x + y",
+            // stack layout: [top]  x y  (Ap _prim_add x) [bottom]
+            vec![
+                Push(1), // y (rhs)
+                Eval,    // y to WHNF
+                Push(1), // x (lhs)
+                Eval,    // x to WHNF
+                Add,
+                Update(2), // Override the (Ap _prim_add x) node
+                Pop(2),
+                Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn sc_prim_if_then_else() {
+        assert_instr_sequence_test(
+            "_prim_if_then_else pred thenBranch elseBranch = 
+                        if pred then thenBranch else elseBranch 
+                ",
+            vec![
+                Push(0), // predicate
+                Eval,    // predicate to WHNF
+                Branch(
+                    Rc::new(StackSafe::new(vec![Push(1), Eval])),
+                    Rc::new(StackSafe::new(vec![Push(2), Eval])),
+                ),
+                Update(3),
+                Pop(3),
+                Unwind,
+            ],
+        )
+    }
+
+    #[test]
+    fn one() {
+        assert_instr_sequence_test("one = 1", vec![PushNum(1), Update(0), Unwind]);
+    }
+
+    #[test]
+    fn two() {
+        assert_instr_sequence_test(
+            "two = 1 + 1",
+            vec![PushNum(1), PushNum(1), Add, Update(0), Unwind],
+        );
+    }
+
+    #[test]
+    fn three() {
+        assert_instr_sequence_test(
+            "three = 1 + 1 + 1",
+            vec![
+                PushNum(1),
+                PushNum(1),
+                PushNum(1),
+                Add,
+                Add,
+                Update(0),
+                Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn four() {
+        assert_instr_sequence_test(
+            "four = 1 + i 1 + 3 - 1",
+            vec![
+                PushNum(1),
+                PushNum(3),
+                PushNum(1),
+                PushGlobal(ast::Name::new("i")),
+                MkAp,
+                Eval,
+                PushNum(1),
+                Add,
+                Add,
+                Sub,
+                Update(0),
+                Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn nested_let_binds() {
+        assert_instr_sequence_test(
+            "nestedLetBinds f = 
+                    letrec x = f x in 
+                        let y = x in 
+                            x + y",
+            vec![
+                Alloc(1),  // allocate x
+                Push(0),   // uninitialized x
+                Push(2),   // f
+                MkAp,      // f x
+                Update(0), // initialze x
+                Push(0),   // y = x
+                Push(0),   // y (rhs of x + y)
+                Eval,      // y to WHNF
+                Push(2),   // x (lhs of x + y)
+                Eval,      // x to WHNF
+                Add,       // (+)
+                Slide(1),  // drop the inner let clause
+                Slide(1),  // drop the outer let clause
+                Update(1), // Caller's Ap nestedLetBinds _ node
+                Pop(1),
+                Unwind,
+            ],
+        )
+    }
+
+    #[test]
+    fn if_then_else() {
+        assert_instr_sequence_test(
+            "ifThenElse = 
+                let bind1=if true && false then 42 + 1 else 69;
+                    bind2=if true || false false then 42 else 69
+                    in if bind1 > bind2 then 0 else 1
+            ",
+            vec![
+                PushGlobal(ast::Name::new("false")),
+                PushGlobal(ast::Name::new("true")),
+                PushGlobal(ast::Name::new("_prim_boolean_and")),
+                MkAp,
+                MkAp,
+                Branch(
+                    Rc::new(StackSafe::new(vec![
+                        PushNum(1),
+                        PushNum(42),
+                        PushGlobal(ast::Name::new("_prim_add")),
+                        MkAp,
+                        MkAp,
+                    ])),
+                    Rc::new(StackSafe::new(vec![PushNum(69)])),
+                ),
+                PushGlobal(ast::Name::new("false")),
+                PushGlobal(ast::Name::new("false")),
+                MkAp,
+                PushGlobal(ast::Name::new("true")),
+                PushGlobal(ast::Name::new("_prim_boolean_or")),
+                MkAp,
+                MkAp,
+                Branch(
+                    Rc::new(StackSafe::new(vec![PushNum(42)])),
+                    Rc::new(StackSafe::new(vec![PushNum(69)])),
+                ),
+                Push(0),
+                Eval,
+                Push(2),
+                Eval,
+                GT,
+                Branch(
+                    Rc::new(StackSafe::new(vec![PushNum(0)])),
+                    Rc::new(StackSafe::new(vec![PushNum(1)])),
+                ),
+                Slide(2),
+                Update(0),
+                Unwind,
+            ],
+        );
     }
 }

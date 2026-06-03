@@ -105,7 +105,7 @@ pub fn token_vec<'src>() -> impl Parser<'src, &'src str, Vec<Token>, extra::Err<
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

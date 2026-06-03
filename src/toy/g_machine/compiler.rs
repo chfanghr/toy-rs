@@ -1,45 +1,28 @@
 use std::{collections::BTreeMap, iter, rc::Rc};
 
-use stacksafe::{StackSafe, stacksafe};
+use stacksafe::stacksafe;
 
 use crate::parser::{
     PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
-    PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_SUB_NAME, ast,
+    PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME,
+    PRIM_SUB_NAME, ast,
 };
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-enum Instruction {
-    Unwind,
-    PushGlobal(ast::Name),
-    PushNum(i64),
-    Push(usize),
-    MkAp,
-    Update(usize),
-    Pop(usize),
-    Alloc(usize),
-    Slide(usize),
-    Eval,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    EQ,
-    GT,
-    GE,
-    LT,
-    LE,
-    BooleanAnd,
-    BooleanOr,
-    Branch(Rc<StackSafe<Code>>, Rc<StackSafe<Code>>),
+use super::types::*;
+
+type Env = Rc<BTreeMap<ast::Name, usize>>;
+
+pub(super) fn p(p: &ast::Program<ast::Name>) -> CompiledProgram {
+    let o: BTreeMap<ast::Name, Code> =
+        p.0.iter()
+            .map(|s| (s.name.clone(), Code::new(sc(&s))))
+            .collect();
+    // TODO: better error message;
+    assert_eq!(p.0.len(), o.len());
+    CompiledProgram::new(o)
 }
 
-type Code = Vec<Instruction>;
-
-type Assoc<K, V> = BTreeMap<K, V>;
-
-type Env = Rc<Assoc<ast::Name, usize>>;
-
-fn sc(sc: &ast::SuperCombinator<ast::Name>) -> Code {
+pub(super) fn sc(sc: &ast::SuperCombinator<ast::Name>) -> Vec<Instruction> {
     let env = sc
         .arguments
         .iter()
@@ -53,7 +36,7 @@ fn sc(sc: &ast::SuperCombinator<ast::Name>) -> Code {
     r(env.len(), &sc.body, Rc::new(env))
 }
 
-fn r(d: usize, expr: &ast::Expr<ast::Name>, env: Env) -> Code {
+fn r(d: usize, expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     e(expr, env)
         .into_iter()
         .chain(iter::once(Instruction::Update(d)))
@@ -63,30 +46,30 @@ fn r(d: usize, expr: &ast::Expr<ast::Name>, env: Env) -> Code {
 }
 
 #[stacksafe]
-fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
+fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     match expr {
         ast::Expr::Num(i) => Some(compile_num(i)),
-        ast::Expr::Ap(_) => e_ap(expr, env.clone()),
-        ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, env.clone())),
+        ast::Expr::Ap(_) => e_ap(expr, Rc::clone(&env)),
+        ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, Rc::clone(&env))),
         ast::Expr::IfThenElse(if_then_else) => {
-            Some(mk_compile_if_then_else(e)(if_then_else, env.clone()))
+            Some(mk_compile_if_then_else(e)(if_then_else, Rc::clone(&env)))
         }
         _ => None,
     }
     .unwrap_or_else(|| e_fallback(expr, env))
 }
 
-fn e_fallback(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
+fn e_fallback(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     c(expr, env)
         .into_iter()
         .chain(iter::once(Instruction::Eval))
         .collect()
 }
 
-fn e_ap(ap: &ast::Expr<ast::Name>, env: Env) -> Option<Code> {
+fn e_ap(ap: &ast::Expr<ast::Name>, env: Env) -> Option<Vec<Instruction>> {
     try {
         let [f, a_1, a_2, a_3] = match_n_ap(4, ap)?;
-        e_ap_3(f, a_1, a_2, a_3, env.clone())?
+        e_ap_3(f, a_1, a_2, a_3, Rc::clone(&env))?
     }
     .or_else(|| try {
         let [f, a_1, a_2] = match_n_ap(3, ap)?;
@@ -127,13 +110,14 @@ fn e_ap_2(
     a_1: &ast::Expr<ast::Name>,
     a_2: &ast::Expr<ast::Name>,
     env: Env,
-) -> Option<Code> {
+) -> Option<Vec<Instruction>> {
     let f = extract_var_expr(f)?;
     let ap_instr = match f.0.as_str() {
         PRIM_ADD_NAME => Some(Instruction::Add),
         PRIM_SUB_NAME => Some(Instruction::Sub),
         PRIM_EQ_NAME => Some(Instruction::EQ),
         PRIM_GE_NAME => Some(Instruction::GE),
+        PRIM_NE_NAME => Some(Instruction::NE),
         PRIM_GT_NAME => Some(Instruction::GT),
         PRIM_LE_NAME => Some(Instruction::LE),
         PRIM_LT_NAME => Some(Instruction::LT),
@@ -153,19 +137,19 @@ fn e_ap_3(
     a_2: &ast::Expr<ast::Name>,
     a_3: &ast::Expr<ast::Name>,
     env: Env,
-) -> Option<Code> {
+) -> Option<Vec<Instruction>> {
     let f = extract_var_expr(f)?;
     match f.0.as_str() {
         "_prim_if" => {
-            let pred_code = e(a_1, env.clone());
-            let then_branch_code = e(a_2, env.clone());
+            let pred_code = e(a_1, Rc::clone(&env));
+            let then_branch_code = e(a_2, Rc::clone(&env));
             let else_branch_code = e(a_3, env);
 
             let res = pred_code
                 .into_iter()
-                .chain(iter::once(Instruction::Branch(
-                    Rc::new(StackSafe::new(then_branch_code)),
-                    Rc::new(StackSafe::new(else_branch_code)),
+                .chain(iter::once(Instruction::new_branch(
+                    then_branch_code,
+                    else_branch_code,
                 )))
                 .collect();
             Some(res)
@@ -175,7 +159,7 @@ fn e_ap_3(
 }
 
 #[stacksafe]
-fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Code {
+fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     match expr {
         ast::Expr::Var(name) => vec![
             env.get(name)
@@ -199,19 +183,19 @@ fn offset_env_by(env: Env, n: isize) -> Env {
     env
 }
 
-fn compile_num(i: &ast::Integer) -> Code {
+fn compile_num(i: &ast::Integer) -> Vec<Instruction> {
     vec![Instruction::PushNum(i.0)]
 }
 
 fn mk_compile_ap_raw<F>(
     compile_lr: F,
     ap_instr: Instruction,
-) -> impl FnOnce(&ast::Expr<ast::Name>, &ast::Expr<ast::Name>, Env) -> Code
+) -> impl FnOnce(&ast::Expr<ast::Name>, &ast::Expr<ast::Name>, Env) -> Vec<Instruction>
 where
-    F: Fn(&ast::Expr<ast::Name>, Env) -> Code,
+    F: Fn(&ast::Expr<ast::Name>, Env) -> Vec<Instruction>,
 {
     move |l, r, env| {
-        let r = compile_lr(r, env.clone());
+        let r = compile_lr(r, Rc::clone(&env));
 
         let env = offset_env_by(env, 1);
         let l = compile_lr(l, env);
@@ -223,10 +207,10 @@ where
 fn mk_compile_let<F, G>(
     compile_def: F,
     compiler_body: G,
-) -> impl FnOnce(&ast::Let<ast::Name>, Env) -> Code
+) -> impl FnOnce(&ast::Let<ast::Name>, Env) -> Vec<Instruction>
 where
-    F: Fn(&ast::Expr<ast::Name>, Env) -> Code,
-    G: FnOnce(&ast::Expr<ast::Name>, Env) -> Code,
+    F: Fn(&ast::Expr<ast::Name>, Env) -> Vec<Instruction>,
+    G: FnOnce(&ast::Expr<ast::Name>, Env) -> Vec<Instruction>,
 {
     move |l, env| {
         let n_defs = l.definitions.len();
@@ -246,7 +230,7 @@ where
             let env = env;
             let code = iter::once(Instruction::Alloc(n_defs))
                 .chain(bs.into_iter().flat_map(|(idx, expr)| {
-                    compile_def(expr, env.clone())
+                    compile_def(expr, Rc::clone(&env))
                         .into_iter()
                         .chain(iter::once(Instruction::Update(idx)))
                 }))
@@ -256,7 +240,7 @@ where
             l.definitions
                 .iter()
                 .fold((env, vec![]), |(env, mut code), b| {
-                    code.extend(compile_def(&b.body, env.clone()));
+                    code.extend(compile_def(&b.body, Rc::clone(&env)));
                     let mut env = offset_env_by(env, 1);
                     Rc::make_mut(&mut env).insert(b.binder.clone(), 0);
                     (env, code)
@@ -268,20 +252,22 @@ where
     }
 }
 
-fn mk_compile_if_then_else<F>(compile: F) -> impl Fn(&ast::IfThenElse<ast::Name>, Env) -> Code
+fn mk_compile_if_then_else<F>(
+    compile: F,
+) -> impl Fn(&ast::IfThenElse<ast::Name>, Env) -> Vec<Instruction>
 where
-    F: Fn(&ast::Expr<ast::Name>, Env) -> Code,
+    F: Fn(&ast::Expr<ast::Name>, Env) -> Vec<Instruction>,
 {
     move |if_then_else, env| {
-        let pred_code = compile(&if_then_else.pred, env.clone());
-        let then_branch_code = compile(&if_then_else.then_branch, env.clone());
+        let pred_code = compile(&if_then_else.pred, Rc::clone(&env));
+        let then_branch_code = compile(&if_then_else.then_branch, Rc::clone(&env));
         let else_branch_code = compile(&if_then_else.else_branch, env);
 
         let res = pred_code
             .into_iter()
-            .chain(iter::once(Instruction::Branch(
-                Rc::new(StackSafe::new(then_branch_code)),
-                Rc::new(StackSafe::new(else_branch_code)),
+            .chain(iter::once(Instruction::new_branch(
+                then_branch_code,
+                else_branch_code,
             )))
             .collect();
 
@@ -290,7 +276,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::parser::must_lex_and_parse_sc;
 
     use super::{Instruction::*, *};
@@ -328,10 +314,7 @@ mod test {
             vec![
                 Push(0), // predicate
                 Eval,    // predicate to WHNF
-                Branch(
-                    Rc::new(StackSafe::new(vec![Push(1), Eval])),
-                    Rc::new(StackSafe::new(vec![Push(2), Eval])),
-                ),
+                Instruction::new_branch(vec![Push(1), Eval], vec![Push(2), Eval]),
                 Update(3),
                 Pop(3),
                 Unwind,
@@ -431,15 +414,15 @@ mod test {
                 PushGlobal(ast::Name::new("_prim_boolean_and")),
                 MkAp,
                 MkAp,
-                Branch(
-                    Rc::new(StackSafe::new(vec![
+                Instruction::new_branch(
+                    vec![
                         PushNum(1),
                         PushNum(42),
                         PushGlobal(ast::Name::new("_prim_add")),
                         MkAp,
                         MkAp,
-                    ])),
-                    Rc::new(StackSafe::new(vec![PushNum(69)])),
+                    ],
+                    vec![PushNum(69)],
                 ),
                 PushGlobal(ast::Name::new("false")),
                 PushGlobal(ast::Name::new("false")),
@@ -448,19 +431,13 @@ mod test {
                 PushGlobal(ast::Name::new("_prim_boolean_or")),
                 MkAp,
                 MkAp,
-                Branch(
-                    Rc::new(StackSafe::new(vec![PushNum(42)])),
-                    Rc::new(StackSafe::new(vec![PushNum(69)])),
-                ),
+                Instruction::new_branch(vec![PushNum(42)], vec![PushNum(69)]),
                 Push(0),
                 Eval,
                 Push(2),
                 Eval,
                 GT,
-                Branch(
-                    Rc::new(StackSafe::new(vec![PushNum(0)])),
-                    Rc::new(StackSafe::new(vec![PushNum(1)])),
-                ),
+                Instruction::new_branch(vec![PushNum(0)], vec![PushNum(1)]),
                 Slide(2),
                 Update(0),
                 Unwind,

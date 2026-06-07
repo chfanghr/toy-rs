@@ -12,6 +12,9 @@ extern crate custom_derive;
 #[macro_use]
 extern crate enum_derive;
 
+#[macro_use]
+extern crate static_assertions;
+
 use anyhow::{Result, anyhow};
 
 pub fn program_from_text<S: AsRef<str>>(i: S) -> Result<parser::ast::Program<parser::ast::Name>> {

@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    g_machine::{compiler, types::CompiledProgram},
+    g_machine::{
+        compiler::{self, PRIM_LAZY_IF},
+        types::CompiledProgram,
+    },
     parser::{
         PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
         PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME,
@@ -36,7 +39,13 @@ fn primitives() -> Vec<ast::SuperCombinator<ast::Name>> {
 }
 
 fn misc() -> Vec<ast::SuperCombinator<ast::Name>> {
-    vec![must_lex_and_parse_sc("fix f = letrec x = f x in x")]
+    vec![
+        must_lex_and_parse_sc("fix f = letrec x = f x in x"),
+        must_lex_and_parse_sc(format!(
+            "{} pred thenBranch elseBranch = if pred then thenBranch else elseBranch",
+            PRIM_LAZY_IF
+        )),
+    ]
 }
 
 fn all() -> ast::Program<ast::Name> {

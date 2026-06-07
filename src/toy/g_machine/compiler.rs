@@ -51,9 +51,7 @@ fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
         ast::Expr::Num(i) => Some(compile_num(i)),
         ast::Expr::Ap(_) => e_ap(expr, Rc::clone(&env)),
         ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, Rc::clone(&env))),
-        ast::Expr::IfThenElse(if_then_else) => {
-            Some(mk_compile_if_then_else(e)(if_then_else, Rc::clone(&env)))
-        }
+        ast::Expr::IfThenElse(if_then_else) => Some(e_if_then_else(if_then_else, Rc::clone(&env))),
         _ => None,
     }
     .unwrap_or_else(|| e_fallback(expr, env))
@@ -115,12 +113,12 @@ fn e_ap_2(
     let ap_instr = match f.0.as_str() {
         PRIM_ADD_NAME => Some(Instruction::Add),
         PRIM_SUB_NAME => Some(Instruction::Sub),
-        PRIM_EQ_NAME => Some(Instruction::EQ),
-        PRIM_GE_NAME => Some(Instruction::GE),
-        PRIM_NE_NAME => Some(Instruction::NE),
-        PRIM_GT_NAME => Some(Instruction::GT),
-        PRIM_LE_NAME => Some(Instruction::LE),
-        PRIM_LT_NAME => Some(Instruction::LT),
+        PRIM_EQ_NAME => Some(Instruction::Eq),
+        PRIM_GE_NAME => Some(Instruction::Ge),
+        PRIM_NE_NAME => Some(Instruction::Ne),
+        PRIM_GT_NAME => Some(Instruction::Gt),
+        PRIM_LE_NAME => Some(Instruction::Le),
+        PRIM_LT_NAME => Some(Instruction::Lt),
         PRIM_BOOLEAN_AND_NAME => Some(Instruction::BooleanAnd),
         PRIM_BOOLEAN_OR_NAME => Some(Instruction::BooleanOr),
         PRIM_DIV_NAME => Some(Instruction::Div),
@@ -158,6 +156,30 @@ fn e_ap_3(
     }
 }
 
+fn e_if_then_else(if_then_else: &ast::IfThenElse<ast::Name>, env: Env) -> Vec<Instruction> {
+    let pred_code = e(&if_then_else.pred, Rc::clone(&env));
+    let then_branch_code = e(&if_then_else.then_branch, Rc::clone(&env));
+    let else_branch_code = e(&if_then_else.else_branch, env);
+
+    let res = pred_code
+        .into_iter()
+        .chain(iter::once(Instruction::new_branch(
+            then_branch_code,
+            else_branch_code,
+        )))
+        .collect();
+
+    res
+}
+
+pub const PRIM_LAZY_IF: &str = "_prim_if";
+
+fn mk_ap_chain(es: Vec<ast::Expr<ast::Name>>) -> ast::Expr<ast::Name> {
+    es.into_iter()
+        .reduce(|acc, a| ast::Expr::Ap(Box::new(ast::Application { l: acc, r: a })))
+        .unwrap()
+}
+
 #[stacksafe]
 fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     match expr {
@@ -169,7 +191,15 @@ fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
         ast::Expr::Num(i) => compile_num(i),
         ast::Expr::Ap(ap) => mk_compile_ap_raw(c, Instruction::MkAp)(&ap.l, &ap.r, env),
         ast::Expr::Let(l) => mk_compile_let(c, c)(&l, env),
-        ast::Expr::IfThenElse(if_then_else) => mk_compile_if_then_else(c)(if_then_else, env),
+        ast::Expr::IfThenElse(if_then_else) => c(
+            &mk_ap_chain(vec![
+                ast::Expr::Var(ast::Name::new(PRIM_LAZY_IF)),
+                if_then_else.pred.clone(),
+                if_then_else.then_branch.clone(),
+                if_then_else.else_branch.clone(),
+            ]),
+            env,
+        ),
         expr => todo!("cannot compile this expr: {:?}", expr),
     }
 }
@@ -249,29 +279,6 @@ where
         code.extend(compiler_body(&l.body, env));
         code.push(Instruction::Slide(n_defs));
         code
-    }
-}
-
-fn mk_compile_if_then_else<F>(
-    compile: F,
-) -> impl Fn(&ast::IfThenElse<ast::Name>, Env) -> Vec<Instruction>
-where
-    F: Fn(&ast::Expr<ast::Name>, Env) -> Vec<Instruction>,
-{
-    move |if_then_else, env| {
-        let pred_code = compile(&if_then_else.pred, Rc::clone(&env));
-        let then_branch_code = compile(&if_then_else.then_branch, Rc::clone(&env));
-        let else_branch_code = compile(&if_then_else.else_branch, env);
-
-        let res = pred_code
-            .into_iter()
-            .chain(iter::once(Instruction::new_branch(
-                then_branch_code,
-                else_branch_code,
-            )))
-            .collect();
-
-        res
     }
 }
 
@@ -409,21 +416,23 @@ mod tests {
                     in if bind1 > bind2 then 0 else 1
             ",
             vec![
+                PushNum(69),
+                PushNum(1),
+                PushNum(42),
+                PushGlobal(ast::Name::new("_prim_add")),
+                MkAp,
+                MkAp,
                 PushGlobal(ast::Name::new("false")),
                 PushGlobal(ast::Name::new("true")),
                 PushGlobal(ast::Name::new("_prim_boolean_and")),
                 MkAp,
                 MkAp,
-                Instruction::new_branch(
-                    vec![
-                        PushNum(1),
-                        PushNum(42),
-                        PushGlobal(ast::Name::new("_prim_add")),
-                        MkAp,
-                        MkAp,
-                    ],
-                    vec![PushNum(69)],
-                ),
+                PushGlobal(ast::Name::new("_prim_if")),
+                MkAp,
+                MkAp,
+                MkAp,
+                PushNum(69),
+                PushNum(42),
                 PushGlobal(ast::Name::new("false")),
                 PushGlobal(ast::Name::new("false")),
                 MkAp,
@@ -431,12 +440,15 @@ mod tests {
                 PushGlobal(ast::Name::new("_prim_boolean_or")),
                 MkAp,
                 MkAp,
-                Instruction::new_branch(vec![PushNum(42)], vec![PushNum(69)]),
+                PushGlobal(ast::Name::new("_prim_if")),
+                MkAp,
+                MkAp,
+                MkAp,
                 Push(0),
                 Eval,
                 Push(2),
                 Eval,
-                GT,
+                Gt,
                 Instruction::new_branch(vec![PushNum(0)], vec![PushNum(1)]),
                 Slide(2),
                 Update(0),

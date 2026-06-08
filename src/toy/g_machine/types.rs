@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, rc::Rc};
 
-use monoid::Monoid;
 use stacksafe::StackSafe;
 
 use crate::parser::ast;
@@ -57,10 +56,10 @@ impl Code {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct CompiledProgram(pub(super) BTreeMap<ast::Name, Code>);
+pub struct CompiledProgram(pub(super) BTreeMap<ast::Name, (usize, Code)>);
 
 impl CompiledProgram {
-    pub fn new(btree_map: BTreeMap<ast::Name, Code>) -> Self {
+    pub fn new(btree_map: BTreeMap<ast::Name, (usize, Code)>) -> Self {
         Self(btree_map)
     }
 }

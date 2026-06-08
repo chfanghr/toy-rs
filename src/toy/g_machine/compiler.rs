@@ -13,9 +13,9 @@ use super::types::*;
 type Env = Rc<BTreeMap<ast::Name, usize>>;
 
 pub(super) fn p(p: &ast::Program<ast::Name>) -> CompiledProgram {
-    let o: BTreeMap<ast::Name, Code> =
+    let o: BTreeMap<ast::Name, (usize, Code)> =
         p.0.iter()
-            .map(|s| (s.name.clone(), Code::new(sc(&s))))
+            .map(|s| (s.name.clone(), (s.arguments.len(), Code::new(sc(&s)))))
             .collect();
     // TODO: better error message;
     assert_eq!(p.0.len(), o.len());

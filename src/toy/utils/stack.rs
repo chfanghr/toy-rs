@@ -119,6 +119,17 @@ impl<T> Stack<T> {
         self.peak_nth_from_top(n).cloned()
     }
 
+    pub fn peak_bottom(&self) -> Option<&T> {
+        self.storage.last()
+    }
+
+    pub fn peak_bottom_cloned(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.peak_bottom().cloned()
+    }
+
     fn decrease_height_by(&mut self, n: usize) {
         assert!(self.height >= n);
         self.height -= n

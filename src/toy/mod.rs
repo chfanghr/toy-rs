@@ -1,5 +1,6 @@
 #![feature(try_blocks)]
 #![feature(trait_alias)]
+#![feature(deque_extend_front)]
 
 pub mod g_machine;
 pub mod lexer;

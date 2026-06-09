@@ -14,6 +14,12 @@ impl<T> Stack<T> {
         }
     }
 
+    pub fn singleton(a: T) -> Self {
+        let mut this = Self::new();
+        this.push(a);
+        this
+    }
+
     pub fn height(&self) -> usize {
         self.height
     }

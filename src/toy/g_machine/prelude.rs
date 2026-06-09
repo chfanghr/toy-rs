@@ -62,7 +62,7 @@ fn all_compiled() -> CompiledProgram {
     compiler::p(&all())
 }
 
-pub(super) fn link_with_prelude(c: CompiledProgram) -> CompiledProgram {
+pub fn link_with_prelude(c: CompiledProgram) -> CompiledProgram {
     let c_len = c.0.len();
 
     let p = all_compiled();

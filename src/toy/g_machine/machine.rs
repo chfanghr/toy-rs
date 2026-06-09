@@ -209,17 +209,17 @@ impl Machine {
             Instruction::Slide(n) => self.handle_slide(n).context("Slide"),
             Instruction::Eval => self.handle_eval().context("Eval"),
             Instruction::Add => self.handle_add().context("Add"),
-            Instruction::Sub => todo!(),
-            Instruction::Mul => todo!(),
-            Instruction::Div => todo!(),
-            Instruction::Eq => todo!(),
-            Instruction::Ne => todo!(),
-            Instruction::Gt => todo!(),
-            Instruction::Ge => todo!(),
-            Instruction::Lt => todo!(),
-            Instruction::Le => todo!(),
-            Instruction::BooleanAnd => todo!(),
-            Instruction::BooleanOr => todo!(),
+            Instruction::Sub => self.handle_sub().context("Sub"),
+            Instruction::Mul => self.handle_mul().context("Mul"),
+            Instruction::Div => self.handle_div().context("Div"),
+            Instruction::Eq => self.handle_eq().context("Eq"),
+            Instruction::Ne => self.handle_ne().context("Ne"),
+            Instruction::Gt => self.handle_gt().context("Gt"),
+            Instruction::Ge => self.handle_ge().context("Ge"),
+            Instruction::Lt => self.handle_lt().context("Lt"),
+            Instruction::Le => self.handle_le().context("Le"),
+            Instruction::BooleanAnd => self.handle_boolean_and().context("BooleanAnd"),
+            Instruction::BooleanOr => self.handle_boolean_or().context("BooleanOr"),
             Instruction::Branch(then_branch, else_branch) => self
                 .handle_branch(&then_branch, &else_branch)
                 .context("Branch"),
@@ -448,6 +448,55 @@ impl Machine {
         self.impl_binary_numerical_prim_op(|l, r| Ok(l + r))
     }
 
+    fn handle_sub(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(l - r))
+    }
+
+    fn handle_mul(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(l * r))
+    }
+
+    fn handle_div(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| {
+            if r == 0 {
+                Err(anyhow!("divide by zero"))
+            } else {
+                Ok(l / r)
+            }
+        })
+    }
+
+    fn handle_eq(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l == r)))
+    }
+
+    fn handle_ne(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l != r)))
+    }
+
+    fn handle_gt(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l > r)))
+    }
+
+    fn handle_ge(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l >= r)))
+    }
+
+    fn handle_lt(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l < r)))
+    }
+    fn handle_le(&mut self) -> Result<()> {
+        self.impl_binary_numerical_prim_op(|l, r| Ok(box_boolean(l <= r)))
+    }
+
+    fn handle_boolean_and(&mut self) -> Result<()> {
+        self.impl_binary_boolean_prim_op(|l, r| Ok(l && r))
+    }
+
+    fn handle_boolean_or(&mut self) -> Result<()> {
+        self.impl_binary_boolean_prim_op(|l, r| Ok(l || r))
+    }
+
     fn handle_branch(
         &mut self,
         then_branch: &StackSafe<Code>,
@@ -565,6 +614,33 @@ impl Machine {
         self.current.stack.push(addr);
 
         Ok(())
+    }
+
+    fn impl_binary_boolean_prim_op<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(bool, bool) -> Result<bool>,
+    {
+        self.impl_binary_numerical_prim_op(|l, r| {
+            let (l, r) = try {
+                let l = unbox_boolean(l)?;
+                let r = unbox_boolean(r)?;
+                (l, r)
+            }
+            .ok_or(anyhow!(
+                "expected both operands to be boolean, got {} and {}",
+                l,
+                r
+            ))?;
+            let b = f(l, r)?;
+            Ok(box_boolean(b))
+        })
+    }
+}
+
+fn box_boolean(b: bool) -> i64 {
+    match b {
+        true => 0,
+        false => 1,
     }
 }
 

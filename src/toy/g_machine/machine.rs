@@ -98,6 +98,7 @@ impl Machine {
         Ok(())
     }
 
+    #[stacksafe::stacksafe]
     fn dispatch(&mut self, i: Instruction) -> Result<()> {
         match i {
             Instruction::Unwind => self.handle_unwind().context("Unwind"),
@@ -113,7 +114,18 @@ impl Machine {
             Instruction::Branch(then_branch, else_branch) => self
                 .handle_branch(then_branch.into_inner(), else_branch.into_inner())
                 .context("Branch"),
-            _ => todo!(),
+            Instruction::Add => self.handle_add().context("Add"),
+            Instruction::Sub => self.handle_sub().context("Sub"),
+            Instruction::Mul => self.handle_mul().context("Mul"),
+            Instruction::Div => self.handle_div().context("Div"),
+            Instruction::Eq => self.handle_eq().context("Eq"),
+            Instruction::Ne => self.handle_ne().context("Ne"),
+            Instruction::Gt => self.handle_gt().context("Gt"),
+            Instruction::Ge => self.handle_ge().context("Ge"),
+            Instruction::Lt => self.handle_lt().context("lt"),
+            Instruction::Le => self.handle_le().context("Le"),
+            Instruction::BooleanAnd => self.handle_boolean_and().context("BooleanAnd"),
+            Instruction::BooleanOr => self.handle_boolean_or().context("BooleanOr"),
         }
     }
 
@@ -372,7 +384,7 @@ impl Machine {
                         let (arg_addrs, non_ap_addrs): (Vec<_>, Vec<_>) = ap_ptrs
                             .into_iter()
                             .partition_map(|addr| match self.must_access_node(addr) {
-                                Node::Ap(l, _) => Left(*l),
+                                Node::Ap(_, r) => Left(*r),
                                 _ => Right(addr),
                             });
 
@@ -408,15 +420,182 @@ impl Machine {
         Ok(())
     }
 
+    /* <Op>:i     a:s d h[a:Num o]     m
+    =>      i a_res:s d h[a_res:Num x] m
+     */
+
+    fn handle_prim_unary<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(i64) -> Result<i64>,
+    {
+        self.current.instructions.pop_front();
+
+        let a = self
+            .current
+            .stack
+            .pop_cloned()
+            .ok_or(anyhow!("operand not found"))?;
+
+        let n = self.must_access_node(a);
+
+        let o = match n {
+            Node::Num(o) => f(*o),
+            _ => Err(anyhow!(
+                "expected operand to be in WHNF, got {:?} at {:?}",
+                n,
+                a
+            )),
+        }?;
+
+        let a_res = self.alloc_num_node(o);
+
+        self.current.stack.push(a_res);
+
+        Ok(())
+    }
+
+    /* <Op>:i a_l:a_r:s d h[a_l:Num l, a_r:Num r] m
+    =>      i   a_res:s d h[a_res:Num x]          m
+     */
+    fn handle_prim_binary<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(i64, i64) -> Result<i64>,
+    {
+        self.current.instructions.pop_front();
+
+        let a_lhs = self
+            .current
+            .stack
+            .pop_cloned()
+            .ok_or(anyhow!("lhs missing"))?;
+        let a_rhs = self
+            .current
+            .stack
+            .pop_cloned()
+            .ok_or(anyhow!("rhs missing"))?;
+
+        let lhs = self.must_access_node(a_lhs);
+        let rhs = self.must_access_node(a_rhs);
+
+        let res = match (lhs, rhs) {
+            (Node::Num(lhs), Node::Num(rhs)) => f(*lhs, *rhs),
+            (lhs, rhs) => Err(anyhow!(
+                "expected lhs and rhs to both be in WHNF, got: lhs {:?} at {:?}, rhs {:?} at {:?}",
+                lhs,
+                a_lhs,
+                rhs,
+                a_rhs
+            )),
+        }?;
+
+        let a_res = self.alloc_num_node(res);
+
+        self.current.stack.push(a_res);
+
+        Ok(())
+    }
+
+    fn handle_add(&mut self) -> Result<()> {
+        self.handle_prim_binary(|l, r| l.checked_add(r).ok_or(anyhow!("overflow")))
+    }
+
+    fn handle_sub(&mut self) -> Result<()> {
+        self.handle_prim_binary(|l, r| l.checked_sub(r).ok_or(anyhow!("overflow")))
+    }
+
+    fn handle_mul(&mut self) -> Result<()> {
+        self.handle_prim_binary(|l, r| l.checked_mul(r).ok_or(anyhow!("overflow")))
+    }
+
+    fn handle_div(&mut self) -> Result<()> {
+        self.handle_prim_binary(|l, r| l.checked_div(r).ok_or(anyhow!("overflow/divide by zero")))
+    }
+
+    fn handle_prim_binary_boolean<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(bool, bool) -> bool,
+    {
+        self.handle_prim_binary(
+            |l, r| match (Self::unbox_boolean(l), Self::unbox_boolean(r)) {
+                (Some(l), Some(r)) => Ok(Self::box_boolean(f(l, r))),
+                _ => Err(anyhow!(
+                    "lhs or rhs is not boxed boolean: lhs {}, rhs {}",
+                    l,
+                    r
+                )),
+            },
+        )
+    }
+
+    // FIXME: how about short circuiting.....
+    fn handle_boolean_and(&mut self) -> Result<()> {
+        self.handle_prim_binary_boolean(|l, r| l && r)
+    }
+
+    fn handle_boolean_or(&mut self) -> Result<()> {
+        self.handle_prim_binary_boolean(|l, r| l || r)
+    }
+
+    fn handle_prim_comp<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(i64, i64) -> bool,
+    {
+        self.handle_prim_binary(|l, r| Ok(Self::box_boolean(f(l, r))))
+    }
+
+    fn handle_eq(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l == r)
+    }
+
+    fn handle_ne(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l != r)
+    }
+
+    fn handle_lt(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l < r)
+    }
+
+    fn handle_le(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l <= r)
+    }
+
+    fn handle_gt(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l > r)
+    }
+
+    fn handle_ge(&mut self) -> Result<()> {
+        self.handle_prim_comp(|l, r| l >= r)
+    }
+
     // Helpers
 
     // FIXME: constr please
-    fn unbox_boolean_at(&self, a: Addr) -> Result<bool> {
-        match self.must_access_node(a) {
-            Node::Num(0) => Ok(false),
-            Node::Num(1) => Ok(true),
-            node => Err(anyhow!("unrecognized boolean: node {:?} at {:?}", node, a)),
+    fn box_boolean(b: bool) -> i64 {
+        match b {
+            true => 1,
+            false => 0,
         }
+    }
+
+    fn unbox_boolean(x: i64) -> Option<bool> {
+        match x {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+
+    fn unbox_boolean_at(&self, a: Addr) -> Result<bool> {
+        let node = self.must_access_node(a);
+        try {
+            let i = match node {
+                Node::Num(i) => Some(*i),
+                _ => None,
+            }?;
+            let res = Self::unbox_boolean(i)?;
+            res
+        }
+        .ok_or(anyhow!("unrecognized boolean: node {:?} at {:?}", node, a))
     }
 
     fn alloc_num_node(&mut self, i: i64) -> Addr {
@@ -468,6 +647,31 @@ impl Machine {
         } else {
             false
         }
+    }
+
+    // Test helpers
+    fn follow_indirection(&self, a: Addr) -> Addr {
+        let mut a = a;
+
+        loop {
+            match self.must_access_node(a) {
+                Node::Indirect(next) => a = *next,
+                _ => break,
+            };
+        }
+
+        a
+    }
+
+    pub(super) fn inspect_global(&self, name: ast::Name) -> Result<String> {
+        let addr = self.lookup_global_name(name)?;
+        let addr = self.follow_indirection(addr);
+        let node = self.must_access_node(addr);
+
+        Ok(match node {
+            Node::Num(n) => format!("NF: {}", n),
+            _ => format!("?: {:?}", node),
+        })
     }
 }
 
@@ -530,5 +734,39 @@ impl Iterator for MachineIterInternal {
             Self::Error(err) => Some(Err(err)),
             Self::Done => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chumsky::Parser;
+
+    use crate::{
+        g_machine::{
+            compiler::p,
+            machine::{Machine, MachineIter},
+            prelude::link_with_prelude,
+        },
+        lexer::token_vec,
+        parser::{ast, parser},
+    };
+
+    #[test]
+    fn t() {
+        let entry_point = ast::Name::new("main");
+        let program = " fact n = if n == 0 then 1 else n * fact (n - 1);
+                              main = fact 10";
+        let tokens = token_vec().parse(program).unwrap();
+        let ast = parser().parse(&tokens).unwrap();
+        let compiled = p(&ast);
+        let compiled = link_with_prelude(compiled);
+        println!("\ncompiled: {:?}", compiled);
+        let machine = Machine::new(compiled, entry_point.clone());
+        let final_result = MachineIter::new(machine).last().unwrap();
+        let pp_entry_point = final_result
+            .unwrap()
+            .inspect_global(entry_point.clone())
+            .unwrap();
+        println!("\n{:?}: {}", entry_point, pp_entry_point);
     }
 }

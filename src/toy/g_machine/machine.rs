@@ -52,6 +52,16 @@ impl Stats {
     fn incr_steps(&mut self) {
         self.steps += 1
     }
+
+    fn pp<'b, D, A>(&'b self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        a.concat([a.text("Steps"), a.space(), a.as_string(self.steps)])
+            .group()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -709,6 +719,9 @@ impl Machine {
             a.hardline(),
             a.text("Dump:"),
             a.hardline().append(self.pp_dump(a)).nest(2),
+            a.hardline(),
+            a.text("Stats:"),
+            a.hardline().append(self.stats.pp(a)).nest(2),
         ])
     }
 

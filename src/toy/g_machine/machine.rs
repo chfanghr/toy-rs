@@ -940,7 +940,10 @@ impl Iterator for MachineIterInternal {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use chumsky::Parser;
+    use lazy_static::lazy_static;
     use pretty::Arena;
 
     use crate::{
@@ -953,7 +956,12 @@ mod tests {
         parser::{ast, parser},
     };
 
-    const DEBUG: bool = true;
+    lazy_static! {
+        static ref DEBUG: bool = env::var("DEBUG").is_ok_and(|x| match x.as_str() {
+            "1" => true,
+            x => x.to_lowercase().as_str() == "true",
+        });
+    }
 
     // Assuming that the entry point is called "main"
     fn assert_eval_result(program: &str, expected: Node) {
@@ -961,9 +969,9 @@ mod tests {
         let tokens = token_vec().parse(program).unwrap();
         let ast = parser().parse(&tokens).unwrap();
         let compiled = p(&ast);
-        // let compiled = link_with_prelude(compiled);
+        let compiled = link_with_prelude(compiled);
         let mut machine = Machine::new(compiled, entry_point.clone());
-        let machine = if DEBUG {
+        let machine = if *DEBUG {
             MachineIter::new(machine)
                 .map(|m| {
                     let m = m.unwrap();
@@ -983,13 +991,49 @@ mod tests {
 
     #[test]
     fn basic() {
-        // assert_eval_result("main = i 42", Node::Num(42));
+        assert_eval_result("main = i 42", Node::Num(42));
         assert_eval_result(
-            "s f g x = f x (g x);
-                      k x y = x;
-                      i1 = s k k;
+            "i1 = s k k;
                       main = i1 42",
             Node::Num(42),
         );
+        assert_eval_result("main = twice twice twice i 42", Node::Num(42));
+    }
+
+    #[test]
+    fn update() {
+        assert_eval_result("main = twice (i i i) 42", Node::Num(42));
+    }
+
+    mod arithmetic {
+        use super::*;
+
+        #[test]
+        fn unconditional() {
+            assert_eval_result("main = 21*2 + (2/2 - 1)", Node::Num(42));
+            assert_eval_result(
+                "incr x = x + 1;
+                          main = twice twice incr 0",
+                Node::Num(4),
+            );
+        }
+
+        #[test]
+        fn conditional() {
+            assert_eval_result(
+                "fac x = if x == 0 then 1 else x*fac (x - 1);
+                          main = fac 5",
+                Node::Num(120),
+            );
+            assert_eval_result(
+                "gcd a b = if a == b 
+                                      then a 
+                                      else if a < b 
+                                            then gcd b a
+                                            else gcd b (a - b);
+                          main = gcd 6 10",
+                Node::Num(2),
+            );
+        }
     }
 }

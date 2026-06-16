@@ -43,6 +43,7 @@ fn misc() -> Vec<ast::SuperCombinator<ast::Name>> {
         must_lex_and_parse_sc("fix f = letrec x = f x in x"),
         must_lex_and_parse_sc("true = 1"),
         must_lex_and_parse_sc("false = 0"),
+        must_lex_and_parse_sc("twice f x = f (f x)"),
         must_lex_and_parse_sc(format!(
             "{} pred thenBranch elseBranch = if pred then thenBranch else elseBranch",
             PRIM_LAZY_IF

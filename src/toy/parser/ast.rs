@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use monoid::Monoid;
+use pretty::{DocAllocator, DocBuilder};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct Name(pub Rc<String>);
@@ -8,6 +9,13 @@ pub struct Name(pub Rc<String>);
 impl Name {
     pub fn new(name: impl ToString) -> Name {
         Name(Rc::new(name.to_string()))
+    }
+
+    pub fn pp<'b, D, A>(&'b self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+    {
+        a.text(self.0.as_str())
     }
 }
 

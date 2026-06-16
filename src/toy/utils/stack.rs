@@ -1,5 +1,7 @@
 use std::{cmp::min, mem};
 
+use pretty::{DocAllocator, DocBuilder};
+
 #[derive(Debug, Clone)]
 pub struct Stack<T> {
     storage: Vec<T>,
@@ -126,7 +128,7 @@ impl<T> Stack<T> {
     }
 
     pub fn peak_bottom(&self) -> Option<&T> {
-        self.storage.last()
+        self.storage.first()
     }
 
     pub fn peak_bottom_cloned(&self) -> Option<T>
@@ -143,6 +145,28 @@ impl<T> Stack<T> {
 
     pub fn all_available(&self) -> impl Iterator<Item = &T> {
         self.storage.iter()
+    }
+
+    pub fn pp_with<'b, D, A, F>(&'b self, a: &'b D, f: F) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        F: Fn(&'b T) -> DocBuilder<'b, D, A>,
+    {
+        a.concat([
+            a.text("["),
+            self.storage
+                .iter()
+                .take(self.height)
+                .rev()
+                .map(|x| a.hardline().append(f(x)))
+                .fold(a.nil(), |acc, x| acc.append(x))
+                .group()
+                .nest(2),
+            a.hardline(),
+            a.text("]"),
+        ])
     }
 }
 

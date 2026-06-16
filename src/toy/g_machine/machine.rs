@@ -8,6 +8,7 @@ use itertools::{
     Either::{Left, Right},
     Itertools,
 };
+use pretty::{DocAllocator, DocBuilder};
 
 use crate::{
     g_machine::types::{Code, CompiledProgram, Instruction},
@@ -19,7 +20,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Node {
+pub(super) enum Node {
     Num(i64),
     Ap(Addr, Addr),
     Global(usize, Code),
@@ -39,11 +40,27 @@ struct EvalFrame {
 }
 
 #[derive(Debug, Clone)]
+struct Stats {
+    steps: usize,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self { steps: 0 }
+    }
+
+    fn incr_steps(&mut self) {
+        self.steps += 1
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Machine {
     current: EvalFrame,
     dump: Vec<EvalFrame>,
     heap: Heap<Node>,
     globals: HashMap<GlobalEntry, Addr>,
+    stats: Stats,
 }
 
 impl Machine {
@@ -60,6 +77,7 @@ impl Machine {
             dump: Vec::new(),
             heap,
             globals,
+            stats: Stats::new(),
         }
     }
 
@@ -95,6 +113,7 @@ impl Machine {
     }
 
     fn do_admin(&mut self) -> Result<()> {
+        self.stats.incr_steps();
         Ok(())
     }
 
@@ -423,7 +442,7 @@ impl Machine {
     /* <Op>:i     a:s d h[a:Num o]     m
     =>      i a_res:s d h[a_res:Num x] m
      */
-
+    #[allow(dead_code)]
     fn handle_prim_unary<F>(&mut self, f: F) -> Result<()>
     where
         F: Fn(i64) -> Result<i64>,
@@ -649,7 +668,7 @@ impl Machine {
         }
     }
 
-    // Test helpers
+    // Test Helpers
     fn follow_indirection(&self, a: Addr) -> Addr {
         let mut a = a;
 
@@ -663,15 +682,197 @@ impl Machine {
         a
     }
 
-    pub(super) fn inspect_global(&self, name: ast::Name) -> Result<String> {
+    pub(super) fn inspect_global(&self, name: ast::Name) -> Result<Node> {
         let addr = self.lookup_global_name(name)?;
         let addr = self.follow_indirection(addr);
         let node = self.must_access_node(addr);
+        Ok(node.clone())
+    }
 
-        Ok(match node {
-            Node::Num(n) => format!("NF: {}", n),
-            _ => format!("?: {:?}", node),
-        })
+    // Pretty Printing
+    pub fn pp<'b, D, A>(&'b self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        a.concat([
+            a.text("Code:"),
+            a.hardline()
+                .append(self.pp_instruction_stream_in(a, &self.current, None))
+                .nest(2),
+            a.hardline(),
+            a.text("Stack:"),
+            a.hardline()
+                .append(self.pp_stack_in(a, &self.current, true))
+                .nest(2),
+            a.hardline(),
+            a.text("Dump:"),
+            a.hardline().append(self.pp_dump(a)).nest(2),
+        ])
+    }
+
+    fn pp_dump<'b, D, A>(&'b self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        a.concat([
+            a.text("["),
+            self.dump
+                .iter()
+                .rev()
+                .fold(a.nil(), |acc, x| {
+                    acc.append(a.hardline().append(self.show_dump_item(a, x)))
+                })
+                .group()
+                .nest(2),
+            a.hardline(),
+            a.text("]"),
+        ])
+    }
+
+    fn show_dump_item<'b, D, A>(&'b self, a: &'b D, frame: &'b EvalFrame) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        a.concat([
+            a.text("<"),
+            a.concat([
+                a.hardline(),
+                a.text("Code:").append(
+                    a.hardline()
+                        .append(self.pp_instruction_stream_in(a, &frame, Some(3)))
+                        .nest(2),
+                ),
+                a.hardline(),
+                a.text("Stack:").append(
+                    a.hardline()
+                        .append(self.pp_stack_in(a, &frame, false))
+                        .nest(2),
+                ),
+            ])
+            .group()
+            .nest(2),
+            a.hardline(),
+            a.text(">"),
+        ])
+    }
+
+    fn pp_instruction_stream_in<'b, D, A>(
+        &'b self,
+        a: &'b D,
+        frame: &'b EvalFrame,
+        limit: Option<usize>,
+    ) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        Instruction::pp_multi(a, frame.instructions.iter(), limit)
+    }
+
+    fn pp_stack_in<'a, 'b, D, A>(
+        &'a self,
+        a: &'b D,
+        frame: &'b EvalFrame,
+        show_items: bool,
+    ) -> DocBuilder<'b, D, A>
+    where
+        'b: 'a,
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        frame
+            .stack
+            .pp_with(a, |addr| self.pp_stack_item(a, *addr, show_items))
+    }
+
+    fn pp_stack_item<'b, D, A>(&self, a: &'b D, addr: Addr, show_item: bool) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        a.concat(iter::once(addr.pp(a)).chain(show_item.then_some(a.concat([
+            a.text(":"),
+            a.space(),
+            self.pp_node_at(a, addr),
+        ]))))
+    }
+
+    fn pp_node_at<'b, D, A>(&self, a: &'b D, addr: Addr) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        match self.must_access_node(addr) {
+            Node::Num(i) => a.as_string(i),
+            Node::Ap(a_1, a_2) => {
+                a.concat([a.text("Ap"), a.space(), a_1.pp(a), a.space(), a_2.pp(a)])
+            }
+            Node::Global(_, _) => {
+                let name = self
+                    .globals
+                    .iter()
+                    .find(|(_, a)| **a == addr)
+                    .map(|(e, _)| match e {
+                        GlobalEntry::Name(name) => (*name.0).clone(),
+                        _ => panic!(
+                            "expected a super combinator but found a number in globals at addr {:?}",
+                            addr
+                        ),
+                    })
+                    .unwrap_or("???".to_string());
+
+                a.concat([a.text("Global"), a.space(), a.text(name)])
+            }
+            Node::Indirect(_) => a
+                .concat([
+                    a.text("Indirect"),
+                    a.line(),
+                    self.pp_indirect_trail(a, addr).nest(2),
+                ])
+                .group(),
+        }
+    }
+
+    fn pp_indirect_trail<'b, D, A>(&self, a: &'b D, addr: Addr) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        let mut addrs = vec![];
+        let mut next_addr = Some(addr);
+        let mut last_addr = addr;
+
+        while let Some(addr) = next_addr {
+            addrs.push(addr);
+            last_addr = addr;
+            next_addr = match self.must_access_node(addr) {
+                Node::Indirect(addr) => Some(*addr),
+                _ => None,
+            };
+        }
+
+        a.intersperse(
+            addrs.into_iter().map(|addr| addr.pp(a)),
+            a.space().append(a.text("->")).append(a.space()),
+        )
+        .append(
+            a.line()
+                .flat_alt(a.concat([a.space(), a.text("|"), a.space()]))
+                .append(self.pp_node_at(a, last_addr))
+                .nest(2),
+        )
+        .group()
     }
 }
 
@@ -740,33 +941,55 @@ impl Iterator for MachineIterInternal {
 #[cfg(test)]
 mod tests {
     use chumsky::Parser;
+    use pretty::Arena;
 
     use crate::{
         g_machine::{
             compiler::p,
-            machine::{Machine, MachineIter},
+            machine::{Machine, MachineIter, Node},
             prelude::link_with_prelude,
         },
         lexer::token_vec,
         parser::{ast, parser},
     };
 
-    #[test]
-    fn t() {
+    const DEBUG: bool = true;
+
+    // Assuming that the entry point is called "main"
+    fn assert_eval_result(program: &str, expected: Node) {
         let entry_point = ast::Name::new("main");
-        let program = " fact n = if n == 0 then 1 else n * fact (n - 1);
-                              main = fact 10";
         let tokens = token_vec().parse(program).unwrap();
         let ast = parser().parse(&tokens).unwrap();
         let compiled = p(&ast);
-        let compiled = link_with_prelude(compiled);
-        println!("\ncompiled: {:?}", compiled);
-        let machine = Machine::new(compiled, entry_point.clone());
-        let final_result = MachineIter::new(machine).last().unwrap();
-        let pp_entry_point = final_result
-            .unwrap()
-            .inspect_global(entry_point.clone())
-            .unwrap();
-        println!("\n{:?}: {}", entry_point, pp_entry_point);
+        // let compiled = link_with_prelude(compiled);
+        let mut machine = Machine::new(compiled, entry_point.clone());
+        let machine = if DEBUG {
+            MachineIter::new(machine)
+                .map(|m| {
+                    let m = m.unwrap();
+                    let a = Arena::<()>::new();
+                    println!("==================\n{}", m.pp(&a).pretty(80));
+                    m
+                })
+                .last()
+                .unwrap()
+        } else {
+            machine.run().unwrap();
+            machine
+        };
+        let actual = machine.inspect_global(entry_point.clone()).unwrap();
+        assert_eq!(actual, expected, "program: {}\n", program)
+    }
+
+    #[test]
+    fn basic() {
+        // assert_eval_result("main = i 42", Node::Num(42));
+        assert_eval_result(
+            "s f g x = f x (g x);
+                      k x y = x;
+                      i1 = s k k;
+                      main = i1 42",
+            Node::Num(42),
+        );
     }
 }

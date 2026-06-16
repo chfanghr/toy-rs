@@ -1,5 +1,6 @@
 use std::mem;
 
+use pretty::{DocAllocator, DocBuilder};
 use roaring::RoaringBitmap;
 
 const_assert!(size_of::<usize>() >= size_of::<u64>());
@@ -8,6 +9,20 @@ const_assert!(size_of::<usize>() >= size_of::<u64>());
 enum AddrInternal {
     Null,
     Idx(u32),
+}
+
+impl AddrInternal {
+    fn pp<'b, D, A>(&self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        match self {
+            AddrInternal::Null => a.text("#nullptr"),
+            AddrInternal::Idx(i) => a.text(format!("#{}", i)),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -53,6 +68,15 @@ impl Addr {
             AddrInternal::Null => panic!("null addr"),
             AddrInternal::Idx(i) => i,
         }
+    }
+
+    pub fn pp<'b, D, A>(&self, a: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        self.0.pp(a)
     }
 }
 

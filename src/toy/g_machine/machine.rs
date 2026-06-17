@@ -155,7 +155,7 @@ impl Machine {
             Instruction::Ne => self.handle_ne().context("Ne"),
             Instruction::Gt => self.handle_gt().context("Gt"),
             Instruction::Ge => self.handle_ge().context("Ge"),
-            Instruction::Lt => self.handle_lt().context("lt"),
+            Instruction::Lt => self.handle_lt().context("Lt"),
             Instruction::Le => self.handle_le().context("Le"),
             Instruction::BooleanAnd => self.handle_boolean_and().context("BooleanAnd"),
             Instruction::BooleanOr => self.handle_boolean_or().context("BooleanOr"),

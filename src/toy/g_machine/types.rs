@@ -36,6 +36,7 @@ pub enum Instruction {
     Branch(StackSafe<Code>, StackSafe<Code>),
 
     Pack(u64 /* tag */, usize /* number of fields */),
+    PushPack(u64, usize),
     CaseJump(IntMap<u64 /* tag */, StackSafe<Code>> /* branches */),
     Split(usize),
 }
@@ -131,6 +132,13 @@ impl Instruction {
             ),
             Instruction::Pack(tag, n_fields) => a.concat([
                 a.text("Pack"),
+                a.space(),
+                a.as_string(tag),
+                a.space(),
+                a.as_string(n_fields),
+            ]),
+            Instruction::PushPack(tag, n_fields) => a.concat([
+                a.text("PushPack"),
                 a.space(),
                 a.as_string(tag),
                 a.space(),

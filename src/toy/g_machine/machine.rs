@@ -34,6 +34,7 @@ pub(super) enum Node {
 enum GlobalEntry {
     Name(ast::Name),
     Num(i64),
+    Pack(u64, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +160,7 @@ impl Machine {
             Instruction::BooleanAnd => self.handle_boolean_and().context("BooleanAnd"),
             Instruction::BooleanOr => self.handle_boolean_or().context("BooleanOr"),
             Instruction::Pack(t, n) => self.handle_pack(t, n).context("Pack"),
+            Instruction::PushPack(t, n) => self.handle_push_pack(t, n).context("PushPack"),
             Instruction::CaseJump(alts) => {
                 let alts = alts
                     .into_iter()
@@ -619,7 +621,6 @@ impl Machine {
     fn handle_pack(&mut self, t: u64, n: usize) -> Result<()> {
         self.current.instructions.pop_front();
 
-        // TODO: handle unsaturated constructor. idea: wrap it in a function?
         let field_addrs = self.pop_n_verify(n)?;
 
         let node = Node::Constr(t, field_addrs);
@@ -629,6 +630,35 @@ impl Machine {
         self.current.stack.push(addr);
 
         Ok(())
+    }
+
+    /* PushPack t n:i   s d h m
+    =>              i a:s d h m[a:Global n (mkPackFn t n)]
+     */
+    fn handle_push_pack(&mut self, t: u64, n: usize) -> Result<()> {
+        self.current.instructions.pop_front();
+
+        let entry = GlobalEntry::Pack(t, n);
+        let a = self.globals.get(&entry).cloned().unwrap_or_else(|| {
+            let code = Self::mk_pack_fn(t, n);
+            let node = Node::Global(n, code);
+            let a = self.heap.alloc(node);
+            self.globals.insert(entry, a);
+            a
+        });
+
+        self.current.stack.push(a);
+
+        Ok(())
+    }
+
+    fn mk_pack_fn(t: u64, n: usize) -> Code {
+        Code::new(vec![
+            Instruction::Pack(t, n),
+            Instruction::Update(n),
+            Instruction::Pop(n),
+            Instruction::Unwind,
+        ])
     }
 
     /* CaseJump [...,t -> c,...]:i a:s d h[a:Constr t fs] m

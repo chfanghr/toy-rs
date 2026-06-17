@@ -1,9 +1,11 @@
 use std::{
     collections::{HashMap, VecDeque},
     iter, mem,
+    ops::Deref,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use intmap::IntMap;
 use itertools::{
     Either::{Left, Right},
     Itertools,
@@ -25,6 +27,7 @@ pub(super) enum Node {
     Ap(Addr, Addr),
     Global(usize, Code),
     Indirect(Addr),
+    Constr(u64, Vec<Addr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -155,6 +158,15 @@ impl Machine {
             Instruction::Le => self.handle_le().context("Le"),
             Instruction::BooleanAnd => self.handle_boolean_and().context("BooleanAnd"),
             Instruction::BooleanOr => self.handle_boolean_or().context("BooleanOr"),
+            Instruction::Pack(t, n) => self.handle_pack(t, n).context("Pack"),
+            Instruction::CaseJump(alts) => {
+                let alts = alts
+                    .into_iter()
+                    .map(|(tag, code)| (tag, code.into_inner()))
+                    .collect();
+                self.handle_case_jump(alts).context("CaseJump")
+            }
+            Instruction::Split(n) => self.handle_split(n).context("Split"),
         }
     }
 
@@ -351,6 +363,8 @@ impl Machine {
        [Unwind] a:s   (i_1, s_1):d h[a:Num x] m
     =>      i_1 a:s_1            d h          m
 
+    (Do the same for constructors)
+
        [Unwind] a:s     d h[a:Ap a_1 a_2] m
     => [Unwind] a_1:a:s d h               m
 
@@ -385,13 +399,8 @@ impl Machine {
             .ok_or(anyhow!("unwind on empty stack"))?;
 
         match self.must_access_node(a) {
-            Node::Num(_) => {
-                self.current.instructions.pop_front();
-
-                if self.try_pop_eval_frame() {
-                    self.current.stack.push(a);
-                }
-            }
+            Node::Num(_) => self.handle_unwind_whnf(a),
+            Node::Constr(_, _) => self.handle_unwind_whnf(a),
             Node::Ap(l_addr, _) => {
                 self.current.stack.push(*l_addr);
             }
@@ -447,6 +456,14 @@ impl Machine {
         };
 
         Ok(())
+    }
+
+    fn handle_unwind_whnf(&mut self, addr: Addr) {
+        self.current.instructions.pop_front();
+
+        if self.try_pop_eval_frame() {
+            self.current.stack.push(addr);
+        }
     }
 
     /* <Op>:i     a:s d h[a:Num o]     m
@@ -594,6 +611,86 @@ impl Machine {
 
     fn handle_ge(&mut self) -> Result<()> {
         self.handle_prim_comp(|l, r| l >= r)
+    }
+
+    /* Pack t n:i a_0:...:a_n-1:s d h                              m
+    =>          i             a:s d h[a: Constr t [a_0,...,a_n-1]] m
+     */
+    fn handle_pack(&mut self, t: u64, n: usize) -> Result<()> {
+        self.current.instructions.pop_front();
+
+        // TODO: handle unsaturated constructor. idea: wrap it in a function?
+        let field_addrs = self.pop_n_verify(n)?;
+
+        let node = Node::Constr(t, field_addrs);
+
+        let addr = self.heap.alloc(node);
+
+        self.current.stack.push(addr);
+
+        Ok(())
+    }
+
+    /* CaseJump [...,t -> c,...]:i a:s d h[a:Constr t fs] m
+                             c++i a:s d h                m
+    */
+    fn handle_case_jump(&mut self, alts: IntMap<u64, Code>) -> Result<()> {
+        self.current.instructions.pop_front();
+
+        let a = self
+            .current
+            .stack
+            .peak_cloned()
+            .ok_or(anyhow!("constr node addr missing"))?;
+
+        let tag = match self.must_access_node(a) {
+            Node::Constr(tag, _) => Ok(*tag),
+            node => Err(anyhow!("expected constr node, got: {:?}", node)),
+        }?;
+
+        let c = alts
+            .get(tag)
+            .ok_or(anyhow!("couldn't find code to handle tag {}", tag))?;
+        let c = c.0.deref().clone();
+
+        self.current.instructions.prepend(c);
+
+        Ok(())
+    }
+
+    /* Split n:i             a:s d h[a:Constr t [a_0,...,a_n-1]] m
+    =>         i a_0:...:a_n-1:s d h                             m
+     */
+    fn handle_split(&mut self, n: usize) -> Result<()> {
+        self.current.instructions.pop_front();
+
+        let a = self
+            .current
+            .stack
+            .pop_cloned()
+            .ok_or(anyhow!("constr node addr missing"))?;
+
+        let field_addrs = match self.must_access_node(a) {
+            Node::Constr(_, field_addrs) => {
+                if field_addrs.len() == n {
+                    Ok(field_addrs.clone())
+                } else {
+                    Err(anyhow!(
+                        "expected constructor to have {} fields, got {}",
+                        n,
+                        field_addrs.len()
+                    ))
+                }
+            }
+            node => Err(anyhow!("expected constr node, got: {:?}", node)),
+        }?;
+
+        field_addrs
+            .into_iter()
+            .rev()
+            .for_each(|addr| self.current.stack.push(addr));
+
+        Ok(())
     }
 
     // Helpers
@@ -848,11 +945,20 @@ impl Machine {
             }
             Node::Indirect(_) => a
                 .concat([
-                    a.text("Indirect"),
+                    a.text("Ind"),
                     a.line(),
                     self.pp_indirect_trail(a, addr).nest(2),
                 ])
                 .group(),
+            Node::Constr(tag, addrs) => a.concat([
+                a.text("Cons"),
+                a.space(),
+                a.as_string(tag),
+                a.space(),
+                a.text("["),
+                a.intersperse(addrs.iter().map(|x| x.pp(a)), a.text(", ")),
+                a.text("]"),
+            ]),
         }
     }
 

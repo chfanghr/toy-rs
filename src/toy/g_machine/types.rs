@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc};
 
+use intmap::IntMap;
 use pretty::{DocAllocator, DocBuilder};
 use stacksafe::{StackSafe, stacksafe};
 
@@ -33,6 +34,10 @@ pub enum Instruction {
 
     // TODO: flatten this?
     Branch(StackSafe<Code>, StackSafe<Code>),
+
+    Pack(u64 /* tag */, usize /* number of fields */),
+    CaseJump(IntMap<u64 /* tag */, StackSafe<Code>> /* branches */),
+    Split(usize),
 }
 
 impl Instruction {
@@ -124,6 +129,39 @@ impl Instruction {
                 .group()
                 .nest(2),
             ),
+            Instruction::Pack(tag, n_fields) => a.concat([
+                a.text("Pack"),
+                a.space(),
+                a.as_string(tag),
+                a.space(),
+                a.as_string(n_fields),
+            ]),
+            Instruction::CaseJump(branches) => a.concat([
+                a.text("CaseJump"),
+                a.space(),
+                a.text("["),
+                a.hardline(),
+                branches
+                    .iter()
+                    .fold(a.nil(), |acc, (tag, code)| {
+                        a.concat([
+                            acc,
+                            a.hardline(),
+                            a.as_string(tag),
+                            a.space(),
+                            a.text("->"),
+                            a.space(),
+                            code.pp(a),
+                        ])
+                    })
+                    .group()
+                    .nest(2),
+                a.hardline(),
+                a.text("]"),
+            ]),
+            Instruction::Split(n_fields) => {
+                a.concat([a.text("Split"), a.space(), a.as_string(n_fields)])
+            }
         }
     }
 }

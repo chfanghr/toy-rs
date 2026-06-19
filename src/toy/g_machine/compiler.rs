@@ -1,11 +1,18 @@
-use std::{collections::BTreeMap, iter, rc::Rc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    iter,
+    rc::Rc,
+};
 
+use itertools::Itertools;
+use nonempty::NonEmpty;
 use stacksafe::stacksafe;
 
 use crate::parser::{
     PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
     PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME,
-    PRIM_SUB_NAME, ast,
+    PRIM_SUB_NAME,
+    ast::{self, ap_chain},
 };
 
 use super::types::*;
@@ -50,6 +57,7 @@ fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     match expr {
         ast::Expr::Num(i) => Some(compile_num(i)),
         ast::Expr::Ap(_) => e_ap(expr, Rc::clone(&env)),
+        ast::Expr::Constr(c) => e_constr(c, Rc::clone(&env)),
         ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, Rc::clone(&env))),
         ast::Expr::IfThenElse(if_then_else) => Some(e_if_then_else(if_then_else, Rc::clone(&env))),
         _ => None,
@@ -64,36 +72,65 @@ fn e_fallback(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
         .collect()
 }
 
+fn e_constr(c: &ast::Constructor, env: Env) -> Option<Vec<Instruction>> {
+    (c.arity.0 == 0).then(|| e_constr_internal(c.tag.0, 0, vec![], env))
+}
+
 fn e_ap(ap: &ast::Expr<ast::Name>, env: Env) -> Option<Vec<Instruction>> {
     try {
-        let [f, a_1, a_2, a_3] = match_n_ap(4, ap)?;
-        e_ap_3(f, a_1, a_2, a_3, Rc::clone(&env))?
+        let (tag, arity, args) = match_saturated_constr(ap)?;
+        e_constr_internal(tag, arity, args, Rc::clone(&env))
     }
     .or_else(|| try {
-        let [f, a_1, a_2] = match_n_ap(3, ap)?;
+        let [f, a_1, a_2, a_3] = match_n_ap(ap)?;
+        e_ap_3(f, a_1, a_2, a_3, Rc::clone(&env))?
+    })
+    .or_else(|| try {
+        let [f, a_1, a_2] = match_n_ap(ap)?;
         e_ap_2(f, a_1, a_2, env)?
     })
 }
 
-fn match_n_ap<'a, O: TryFrom<Vec<&'a ast::Expr<ast::Name>>>>(
-    n: usize,
+fn match_n_ap<'a, const N: usize>(
     e: &'a ast::Expr<ast::Name>,
-) -> Option<O> {
-    let mut e = e;
-    let mut res = vec![];
+) -> Option<[&'a ast::Expr<ast::Name>; N]> {
+    let es = un_ap_chain(e)?;
+    let es: Vec<_> = es.into();
+    es.try_into().ok()
+}
 
-    while res.len() < n {
-        if let ast::Expr::Ap(a) = e {
-            res.push(&a.r);
-            e = &a.l;
-        } else {
-            res.push(e);
-            break;
-        }
+fn match_saturated_constr<'a>(
+    e: &'a ast::Expr<ast::Name>,
+) -> Option<(u64, usize, Vec<&'a ast::Expr<ast::Name>>)> {
+    let es = un_ap_chain(e)?;
+    let (e, es) = es.into();
+    let (tag, arity) = match e {
+        ast::Expr::Constr(c) => Some((c.tag.0, c.arity.0 as usize)),
+        _ => None,
+    }?;
+    (es.len() == arity).then_some(())?;
+    Some((tag, arity, es))
+}
+
+fn un_ap_chain<'a>(e: &'a ast::Expr<ast::Name>) -> Option<NonEmpty<&'a ast::Expr<ast::Name>>> {
+    let mut e = e;
+    let mut out = VecDeque::new();
+
+    while let ast::Expr::Ap(a) = e {
+        out.push_front(&a.r);
+        e = &a.l;
     }
 
-    res.reverse();
-    O::try_from(res).ok()
+    out.push_front(e);
+
+    if out.len() > 1 {
+        let inner_most = out.pop_front().unwrap();
+        let rest: Vec<_> = out.into();
+        let out = (inner_most, rest).into();
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn extract_var_expr(e: &ast::Expr<ast::Name>) -> Option<&ast::Name> {
@@ -156,6 +193,24 @@ fn e_ap_3(
     }
 }
 
+fn e_constr_internal(
+    tag: u64,
+    arity: usize,
+    args: Vec<&ast::Expr<ast::Name>>,
+    env: Env,
+) -> Vec<Instruction> {
+    let mut code = args
+        .into_iter()
+        .scan(env, |env, expr| {
+            let code = c(expr, Rc::clone(env));
+            *env = offset_env_by(env.clone(), 1);
+            Some(code)
+        })
+        .concat();
+    code.push(Instruction::Pack(tag, arity));
+    code
+}
+
 fn e_if_then_else(if_then_else: &ast::IfThenElse<ast::Name>, env: Env) -> Vec<Instruction> {
     let pred_code = e(&if_then_else.pred, Rc::clone(&env));
     let then_branch_code = e(&if_then_else.then_branch, Rc::clone(&env));
@@ -200,6 +255,7 @@ fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
             ]),
             env,
         ),
+        ast::Expr::Constr(c) => vec![Instruction::PushPack(c.tag.0, c.arity.0 as usize)],
         expr => todo!("cannot compile this expr: {:?}", expr),
     }
 }
@@ -284,7 +340,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::must_lex_and_parse_sc;
+    use nonempty::nonempty;
+
+    use crate::parser::{self, ast::Name, must_lex_and_parse_sc};
 
     use super::{Instruction::*, *};
 
@@ -454,6 +512,60 @@ mod tests {
                 Update(0),
                 Unwind,
             ],
+        );
+    }
+
+    #[test]
+    fn saturated_constr() {
+        assert_instr_sequence_test("nil = Pack{0,0}", vec![Pack(0, 0), Update(0), Unwind]);
+        assert_instr_sequence_test(
+            "just x = Pack{0,1} x",
+            vec![Push(0), Pack(0, 1), Update(1), Pop(1), Unwind],
+        );
+        assert_instr_sequence_test(
+            "just x = let r = Pack{0,1} x in r",
+            vec![
+                Push(0),        // x
+                PushPack(0, 1), // Pack{0,1}
+                MkAp,
+                Push(0),
+                Eval,
+                Slide(1),
+                Update(1),
+                Pop(1),
+                Unwind,
+            ],
+        );
+    }
+
+    #[test]
+    fn unsaturated_constr() {
+        assert_instr_sequence_test(
+            "cons = Pack{1,2}",
+            vec![PushPack(1, 2), Eval, Update(0), Unwind],
+        );
+    }
+
+    #[test]
+    fn test_un_ap_chain() {
+        assert_eq!(None, un_ap_chain(&must_lex_and_parse_sc("main = 1").body));
+        assert_eq!(
+            Some(nonempty![
+                &ast::Expr::Constr(ast::Constructor {
+                    tag: ast::Tag(0),
+                    arity: ast::Arity(1)
+                }),
+                &ast::Expr::Num(ast::Integer(1))
+            ]),
+            un_ap_chain(&must_lex_and_parse_sc("main = Pack{0,1} 1").body)
+        );
+        assert_eq!(
+            Some(nonempty![
+                &ast::Expr::Var(Name::new(parser::PRIM_ADD_NAME)),
+                &ast::Expr::Num(ast::Integer(1)),
+                &ast::Expr::Num(ast::Integer(2))
+            ]),
+            un_ap_chain(&must_lex_and_parse_sc("main = 1 + 2").body)
         );
     }
 }

@@ -653,12 +653,13 @@ impl Machine {
     }
 
     fn mk_pack_fn(t: u64, n: usize) -> Code {
-        Code::new(vec![
-            Instruction::Pack(t, n),
-            Instruction::Update(n),
-            Instruction::Pop(n),
-            Instruction::Unwind,
-        ])
+        Code::new(
+            [Instruction::Pack(t, n), Instruction::Update(n)]
+                .into_iter()
+                .chain((n == 0).then_some(Instruction::Pop(n)).into_iter())
+                .chain(iter::once(Instruction::Unwind))
+                .collect(),
+        )
     }
 
     /* CaseJump [...,t -> c,...]:i a:s d h[a:Constr t fs] m

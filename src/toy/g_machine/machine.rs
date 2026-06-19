@@ -1092,9 +1092,11 @@ impl Iterator for MachineIterInternal {
 mod tests {
     use std::env;
 
+    use anyhow::{Context, Result, bail, ensure};
     use chumsky::Parser;
     use lazy_static::lazy_static;
     use pretty::Arena;
+    use stacksafe::{StackSafe, stacksafe};
 
     use crate::{
         g_machine::{
@@ -1113,8 +1115,62 @@ mod tests {
         });
     }
 
+    #[derive(Debug)]
+    enum ExpectedResult {
+        Num(i64),
+        Constr(u64, Vec<StackSafe<ExpectedResult>>),
+    }
+
+    #[stacksafe]
+    fn check_result(m: &Machine, node: &Node, expected: StackSafe<ExpectedResult>) -> Result<()> {
+        match (node, expected.into_inner()) {
+            (Node::Indirect(i), expected) => {
+                check_result(m, m.must_access_node(*i), StackSafe::new(expected))
+            }
+            (Node::Num(actual), ExpectedResult::Num(expected)) => {
+                ensure!(
+                    *actual == expected,
+                    "num should be {} but got {}",
+                    expected,
+                    actual
+                );
+                Ok(())
+            }
+            (
+                Node::Constr(tag_actual, fields_actual),
+                ExpectedResult::Constr(tag_expected, fields_expected),
+            ) => {
+                ensure!(
+                    *tag_actual == tag_expected,
+                    "constr tag should be {} but got {}",
+                    tag_expected,
+                    tag_actual
+                );
+                ensure!(
+                    fields_actual.len() == fields_expected.len(),
+                    "constr fields len should be {} but got {}",
+                    fields_expected.len(),
+                    fields_actual.len(),
+                );
+
+                fields_actual
+                    .iter()
+                    .copied()
+                    .map(|a| m.must_access_node(a))
+                    .zip(fields_expected)
+                    .enumerate()
+                    .try_for_each(|(idx, (node, expected))| {
+                        check_result(m, node, expected).context(format!("constr field {}", idx))
+                    })?;
+
+                Ok(())
+            }
+            (node, expected) => bail!("not in whnf: node: {:?}, expected: {:?}", node, expected),
+        }
+    }
+
     // Assuming that the entry point is called "main"
-    fn assert_eval_result(program: &str, expected: Node) {
+    fn assert_eval_result(program: &str, expected: ExpectedResult) {
         let entry_point = ast::Name::new("main");
         let tokens = token_vec().parse(program).unwrap();
         let ast = parser().parse(&tokens).unwrap();
@@ -1135,24 +1191,24 @@ mod tests {
             machine.run().unwrap();
             machine
         };
-        let actual = machine.inspect_global(entry_point.clone()).unwrap();
-        assert_eq!(actual, expected, "program: {}\n", program)
+        let node = machine.inspect_global(entry_point.clone()).unwrap();
+        check_result(&machine, &node, StackSafe::new(expected)).unwrap();
     }
 
     #[test]
     fn basic() {
-        assert_eval_result("main = i 42", Node::Num(42));
+        assert_eval_result("main = i 42", ExpectedResult::Num(42));
         assert_eval_result(
             "i1 = s k k;
                       main = i1 42",
-            Node::Num(42),
+            ExpectedResult::Num(42),
         );
-        assert_eval_result("main = twice twice twice i 42", Node::Num(42));
+        assert_eval_result("main = twice twice twice i 42", ExpectedResult::Num(42));
     }
 
     #[test]
     fn update() {
-        assert_eval_result("main = twice (i i i) 42", Node::Num(42));
+        assert_eval_result("main = twice (i i i) 42", ExpectedResult::Num(42));
     }
 
     mod arithmetic {
@@ -1160,11 +1216,11 @@ mod tests {
 
         #[test]
         fn unconditional() {
-            assert_eval_result("main = 21*2 + (2/2 - 1)", Node::Num(42));
+            assert_eval_result("main = 21*2 + (2/2 - 1)", ExpectedResult::Num(42));
             assert_eval_result(
                 "incr x = x + 1;
                           main = twice twice incr 0",
-                Node::Num(4),
+                ExpectedResult::Num(4),
             );
         }
 
@@ -1173,7 +1229,7 @@ mod tests {
             assert_eval_result(
                 "fac x = if x == 0 then 1 else x*fac (x - 1);
                           main = fac 5",
-                Node::Num(120),
+                ExpectedResult::Num(120),
             );
             assert_eval_result(
                 "gcd a b = if a == b 
@@ -1182,7 +1238,7 @@ mod tests {
                                             then gcd b a
                                             else gcd b (a - b);
                           main = gcd 6 10",
-                Node::Num(2),
+                ExpectedResult::Num(2),
             );
         }
     }

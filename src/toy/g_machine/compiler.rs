@@ -11,8 +11,7 @@ use stacksafe::stacksafe;
 use crate::parser::{
     PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
     PRIM_GE_NAME, PRIM_GT_NAME, PRIM_LE_NAME, PRIM_LT_NAME, PRIM_MUL_NAME, PRIM_NE_NAME,
-    PRIM_SUB_NAME,
-    ast::{self, ap_chain},
+    PRIM_SUB_NAME, ast,
 };
 
 use super::types::*;

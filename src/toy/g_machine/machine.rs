@@ -654,13 +654,11 @@ impl Machine {
     }
 
     fn mk_pack_fn(t: u64, n: usize) -> Code {
-        Code::new(
-            [Instruction::Pack(t, n), Instruction::Update(n)]
-                .into_iter()
-                .chain((n == 0).then_some(Instruction::Pop(n)).into_iter())
-                .chain(iter::once(Instruction::Unwind))
-                .collect(),
-        )
+        Code::new(vec![
+            Instruction::Pack(t, n),
+            Instruction::Update(0),
+            Instruction::Unwind,
+        ])
     }
 
     /* CaseJump [...,t -> c,...]:i a:s d h[a:Constr t fs] m
@@ -1267,7 +1265,7 @@ mod tests {
             // assert_eval_result(
             //     "main = let nil = Pack{0, 0};
             //                          cons = Pack{1, 2}
-            //                         in cons 1 (cons 2 (cons 3 nil))",
+            //                         in cons 1 (force (cons 2 (force (cons 3 nil))))",
             //     mk_cons(1, mk_cons(2, mk_cons(3, mk_nil()))),
             // );
         }

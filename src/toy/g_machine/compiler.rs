@@ -200,6 +200,7 @@ fn e_constr_internal(
 ) -> Vec<Instruction> {
     let mut code = args
         .into_iter()
+        .rev()
         .scan(env, |env, expr| {
             let code = c(expr, Rc::clone(env));
             *env = offset_env_by(env.clone(), 1);
@@ -532,6 +533,20 @@ mod tests {
                 Slide(1),
                 Update(1),
                 Pop(1),
+                Unwind,
+            ],
+        );
+        assert_instr_sequence_test(
+            "c = Pack{0, 2} 1 (2 + 3)",
+            vec![
+                PushNum(3),
+                PushNum(2),
+                PushGlobal(Name::new("_prim_add")),
+                MkAp,
+                MkAp,
+                PushNum(1),
+                Pack(0, 2),
+                Update(0),
                 Unwind,
             ],
         );

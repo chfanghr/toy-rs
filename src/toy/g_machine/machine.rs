@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fmt::format,
     iter, mem,
     ops::Deref,
 };
@@ -965,10 +966,8 @@ impl Machine {
                     .find(|(_, a)| **a == addr)
                     .map(|(e, _)| match e {
                         GlobalEntry::Name(name) => (*name.0).clone(),
-                        _ => panic!(
-                            "expected a super combinator but found a number in globals at addr {:?}",
-                            addr
-                        ),
+                        GlobalEntry::Pack(tag, arity) => format!("Pack {} {}", tag, arity),
+                        _ => panic!("unexpected number in globals at addr {:?}", addr),
                     })
                     .unwrap_or("???".to_string());
 
@@ -1240,6 +1239,37 @@ mod tests {
                           main = gcd 6 10",
                 ExpectedResult::Num(2),
             );
+        }
+    }
+
+    mod structual {
+        use super::*;
+
+        #[test]
+        fn packs() {
+            assert_eval_result("main = Pack{1, 0}", ExpectedResult::Constr(1, vec![]));
+            assert_eval_result(
+                "main = let x = Pack{1, 0} in x",
+                ExpectedResult::Constr(1, vec![]),
+            );
+
+            // FIXME: this doesn't work for now bcs we only evaluate main to WHNF
+            // fn mk_nil() -> ExpectedResult {
+            //     ExpectedResult::Constr(0, vec![])
+            // }
+            // fn mk_cons(x: i64, rest: ExpectedResult) -> ExpectedResult {
+            //     ExpectedResult::Constr(
+            //         1,
+            //         vec![StackSafe::new(ExpectedResult::Num(x)), StackSafe::new(rest)],
+            //     )
+            // }
+
+            // assert_eval_result(
+            //     "main = let nil = Pack{0, 0};
+            //                          cons = Pack{1, 2}
+            //                         in cons 1 (cons 2 (cons 3 nil))",
+            //     mk_cons(1, mk_cons(2, mk_cons(3, mk_nil()))),
+            // );
         }
     }
 }

@@ -4,9 +4,10 @@ use std::{
     rc::Rc,
 };
 
+use intmap::IntMap;
 use itertools::Itertools;
 use nonempty::NonEmpty;
-use stacksafe::stacksafe;
+use stacksafe::{StackSafe, stacksafe};
 
 use crate::parser::{
     PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
@@ -59,6 +60,7 @@ fn e(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
         ast::Expr::Constr(c) => e_constr(c, Rc::clone(&env)),
         ast::Expr::Let(l) => Some(mk_compile_let(c, e)(&l, Rc::clone(&env))),
         ast::Expr::IfThenElse(if_then_else) => Some(e_if_then_else(if_then_else, Rc::clone(&env))),
+        ast::Expr::Case(case_of) => Some(e_case_of(case_of, Rc::clone(&env))),
         _ => None,
     }
     .unwrap_or_else(|| e_fallback(expr, env))
@@ -235,6 +237,25 @@ fn mk_ap_chain(es: Vec<ast::Expr<ast::Name>>) -> ast::Expr<ast::Name> {
         .unwrap()
 }
 
+fn e_case_of(case_of: &ast::Case<ast::Name>, env: Env) -> Vec<Instruction> {
+    let scru_code = e(&case_of.scru, env.clone());
+    let env = offset_env_by(env, 1);
+    let n_branches = case_of.branches.len();
+    let alts = case_of
+        .branches
+        .iter()
+        .map(|b| {
+            let (tag, code) = a(b, env.clone());
+            (tag, StackSafe::new(Code::new(code)))
+        })
+        .collect::<IntMap<_, _>>();
+    assert_eq!(alts.len(), n_branches);
+    scru_code
+        .into_iter()
+        .chain(iter::once(Instruction::CaseJump(alts)))
+        .collect()
+}
+
 #[stacksafe]
 fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     match expr {
@@ -338,6 +359,30 @@ where
     }
 }
 
+fn a(alt: &ast::Branch<ast::Name>, env: Env) -> (u64, Vec<Instruction>) {
+    let n_bounded_fields = alt.bound_fields.len();
+    let mut env = env;
+
+    alt.bound_fields
+        .iter()
+        .enumerate()
+        .fold(Rc::make_mut(&mut env), |acc, (idx, x)| {
+            acc.insert(x.clone(), idx);
+            acc
+        });
+
+    let env = env;
+
+    let body_code = e(&alt.body, env);
+
+    let body_code = iter::once(Instruction::Split(n_bounded_fields))
+        .chain(body_code)
+        .chain(iter::once(Instruction::Slide(n_bounded_fields)))
+        .collect();
+
+    (alt.tag.0, body_code)
+}
+
 #[cfg(test)]
 mod tests {
     use nonempty::nonempty;
@@ -346,6 +391,7 @@ mod tests {
 
     use super::{Instruction::*, *};
 
+    #[stacksafe]
     fn assert_instr_sequence_test(inp: &str, expected: Vec<Instruction>) {
         let sc_ast = must_lex_and_parse_sc(inp);
         let actual = sc(&sc_ast);
@@ -581,5 +627,45 @@ mod tests {
             ]),
             un_ap_chain(&must_lex_and_parse_sc("main = 1 + 2").body)
         );
+    }
+
+    #[test]
+    fn length() {
+        assert_instr_sequence_test(
+            "length l = case l of
+                    [0] -> 0;
+                    [1] x xs -> 1 + length xs 
+                 ",
+            vec![
+                Push(0),
+                Eval,
+                CaseJump(
+                    [
+                        (
+                            0,
+                            StackSafe::new(Code::new(vec![Split(0), PushNum(0), Slide(0)])),
+                        ),
+                        (
+                            1,
+                            StackSafe::new(Code::new(vec![
+                                Split(2),
+                                Push(1),
+                                PushGlobal(Name::new("length")),
+                                MkAp,
+                                Eval,
+                                PushNum(1),
+                                Add,
+                                Slide(2),
+                            ])),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                Update(1),
+                Pop(1),
+                Unwind,
+            ],
+        )
     }
 }

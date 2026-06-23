@@ -1269,5 +1269,20 @@ mod tests {
             //     mk_cons(1, mk_cons(2, mk_cons(3, mk_nil()))),
             // );
         }
+
+        #[test]
+        fn pattern_matching() {
+            assert_eval_result(
+                "sum xs = case xs of 
+                                    [0] -> 0;
+                                    [1] x xs -> x + sum xs;
+                          nil = Pack{0,0};
+                          cons = Pack{1,2};
+                          l = cons 1 (cons 2 (cons 3 nil));
+                          main = sum l
+                         ",
+                ExpectedResult::Num(6),
+            );
+        }
     }
 }

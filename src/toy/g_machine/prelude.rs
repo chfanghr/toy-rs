@@ -16,6 +16,7 @@ fn ski() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
         must_lex_and_parse_sc("i x = x"),
         must_lex_and_parse_sc("k x y = x"),
+        must_lex_and_parse_sc("k1 x y = y"),
         must_lex_and_parse_sc("s f g x = f x (g x)"),
     ]
 }
@@ -38,6 +39,40 @@ fn primitives() -> Vec<ast::SuperCombinator<ast::Name>> {
     ]
 }
 
+fn list() -> Vec<ast::SuperCombinator<ast::Name>> {
+    vec![
+        must_lex_and_parse_sc("nil = Pack{0,0}"),
+        must_lex_and_parse_sc("cons = Pack{1,2}"),
+        must_lex_and_parse_sc(
+            "list onNil onCons xs =
+                case xs of
+                    [0] -> onNil;
+                    [1] x xs -> onCons x xs
+            ",
+        ),
+        must_lex_and_parse_sc("head = list abort k"),
+        must_lex_and_parse_sc("tail = list abort k1"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_index i x xs = if i == 0 then x else index (i - 1) xs"),
+        must_lex_and_parse_sc("index i = list abort (_index i)"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_length x xs = 1 + length xs"),
+        must_lex_and_parse_sc("length = list 0 _length"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_map f x xs = cons (f x) (map f xs)"),
+        must_lex_and_parse_sc("map f = list nil (_map f)"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_sum x xs = x + sum xs"),
+        must_lex_and_parse_sc("sum = list 0 _sum"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_filter f x xs = (if f x then cons x else i) (filter f xs)"),
+        must_lex_and_parse_sc("filter f = list nil (_filter f)"),
+        // FIXME: use lambda when we have a lambda lifter
+        must_lex_and_parse_sc("_nats x = cons x (_nats (x + 1))"),
+        must_lex_and_parse_sc("nats = _nats 0"),
+    ]
+}
+
 fn misc() -> Vec<ast::SuperCombinator<ast::Name>> {
     vec![
         must_lex_and_parse_sc("fix f = letrec x = f x in x"),
@@ -57,6 +92,7 @@ fn all() -> ast::Program<ast::Name> {
             .into_iter()
             .chain(primitives())
             .chain(misc())
+            .chain(list())
             .collect(),
     )
 }

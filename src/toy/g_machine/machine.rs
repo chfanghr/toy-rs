@@ -1337,30 +1337,23 @@ mod tests {
         #[test]
         fn pattern_matching() -> Result<()> {
             assert_eval_result(
-                "sum xs = case xs of
-                                    [0] -> 0;
-                                    [1] x xs -> x + sum xs;
-                          nil = Pack{0,0};
-                          cons = Pack{1,2};
-                          l = cons 1 (cons 2 (cons 3 nil));
-                          main = sum l
-                         ",
+                "main = sum (cons 1 (cons 2 (cons 3 nil)))",
                 ExpectedResult::Num(6),
             )?;
             assert_eval_result(
-                "numsInner x = cons x (numsInner (x + 1));
-                          nums = numsInner 0;
-                          evens xs = case xs of
+                "evens xs = case xs of
                                         [0] -> nil;
                                         [1] x xs -> case xs of
                                             [0] -> cons x nil;
                                             [1] y xs -> cons x (evens xs);
-                          evenNums = evens nums;
-                          index i xs = case xs of
-                                        [0] -> abort;
-                                        [1] x xs -> if i == 0 then x else index (i - 1) xs;
-                          nil = Pack{0,0};
-                          cons = Pack{1,2};
+                          evenNums = evens nats;
+                          main = index 25 evenNums
+                         ",
+                ExpectedResult::Num(50),
+            )?;
+            assert_eval_result(
+                "even x = x == ((x / 2) * 2);
+                          evenNums = filter even nats;
                           main = index 25 evenNums
                          ",
                 ExpectedResult::Num(50),

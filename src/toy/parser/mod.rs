@@ -293,7 +293,7 @@ fn case_of<'src>(
         .map(|(scru, branches)| Case { scru, branches })
 }
 
-// branch -> <num> var_1, ... , var_n -> expr where n >= 0
+// branch -> [num] var_1, ... , var_n -> expr where n >= 0
 fn branch<'src>(
     expr: impl TokenStreamParser<'src, Expr<Name>>,
 ) -> impl TokenStreamParser<'src, Branch<Name>> {

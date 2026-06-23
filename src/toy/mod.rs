@@ -4,6 +4,7 @@
 #![feature(map_try_insert)]
 
 pub mod g_machine;
+pub mod lambda_lifter;
 pub mod lexer;
 pub mod parser;
 pub mod template_instantiation;

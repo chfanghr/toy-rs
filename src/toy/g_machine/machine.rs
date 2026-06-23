@@ -30,6 +30,53 @@ pub(super) enum Node {
     Constr(u64, Vec<Addr>),
 }
 
+#[derive(Debug)]
+enum WHNFData {
+    Num(i64),
+    Constr(u64, Vec<Addr>),
+}
+
+impl WHNFData {
+    fn from_node(node: Node) -> Option<WHNFData> {
+        match node {
+            Node::Constr(tag, fields) => Some(WHNFData::Constr(tag, fields)),
+            Node::Num(x) => Some(WHNFData::Num(x)),
+            _ => None,
+        }
+    }
+
+    const TRUE_TAG: u64 = 1;
+    const FALSE_TAG: u64 = 0;
+
+    fn box_boolean(b: bool) -> WHNFData {
+        match b {
+            true => WHNFData::Constr(Self::TRUE_TAG, vec![]),
+            false => WHNFData::Constr(Self::FALSE_TAG, vec![]),
+        }
+    }
+
+    fn unbox_boolean(&self) -> Option<bool> {
+        match self {
+            WHNFData::Constr(tag, fields) => {
+                (fields.len() == 0).then_some(())?;
+                match *tag {
+                    Self::TRUE_TAG => Some(true),
+                    Self::FALSE_TAG => Some(false),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn expect_num(&self) -> Option<i64> {
+        match self {
+            WHNFData::Num(x) => Some(*x),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GlobalEntry {
     Name(ast::Name),
@@ -505,9 +552,9 @@ impl Machine {
     /* <Op>:i a_l:a_r:s d h[a_l:Num l, a_r:Num r] m
     =>      i   a_res:s d h[a_res:Num x]          m
      */
-    fn handle_prim_binary<F>(&mut self, f: F) -> Result<()>
+    fn handle_prim_binary_whnf<F>(&mut self, f: F) -> Result<()>
     where
-        F: Fn(i64, i64) -> Result<i64>,
+        F: Fn(WHNFData, WHNFData) -> Result<WHNFData>,
     {
         self.current.instructions.pop_front();
 
@@ -525,54 +572,75 @@ impl Machine {
         let lhs = self.must_access_node(a_lhs);
         let rhs = self.must_access_node(a_rhs);
 
-        let res = match (lhs, rhs) {
-            (Node::Num(lhs), Node::Num(rhs)) => f(*lhs, *rhs),
-            (lhs, rhs) => Err(anyhow!(
-                "expected lhs and rhs to both be in WHNF, got: lhs {:?} at {:?}, rhs {:?} at {:?}",
-                lhs,
-                a_lhs,
-                rhs,
-                a_rhs
-            )),
-        }?;
+        let lhs = WHNFData::from_node(lhs.clone()).ok_or(anyhow!(
+            "lhs is not in WHNF: addr {:?}, node {:?}",
+            a_lhs,
+            lhs
+        ))?;
+        let rhs = WHNFData::from_node(rhs.clone()).ok_or(anyhow!(
+            "rhs is not in WHNF: addr {:?}, node {:?}",
+            a_lhs,
+            lhs
+        ))?;
 
-        let a_res = self.alloc_num_node(res);
+        let res = f(lhs, rhs)?;
+
+        let a_res = match res {
+            WHNFData::Num(x) => self.alloc_num_node(x),
+            WHNFData::Constr(tag, fields) => self.heap.alloc(Node::Constr(tag, fields)),
+        };
 
         self.current.stack.push(a_res);
 
         Ok(())
     }
 
+    fn handle_prim_binary_whnf_numerical<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(i64, i64) -> Result<i64>,
+    {
+        self.handle_prim_binary_whnf(|l, r| {
+            let l = l.expect_num().ok_or(anyhow!("lhs is not num"))?;
+            let r = r.expect_num().ok_or(anyhow!("rhs is not num"))?;
+            f(l, r).map(WHNFData::Num)
+        })
+    }
+
     fn handle_add(&mut self) -> Result<()> {
-        self.handle_prim_binary(|l, r| l.checked_add(r).ok_or(anyhow!("overflow")))
+        self.handle_prim_binary_whnf_numerical(|l, r| l.checked_add(r).ok_or(anyhow!("overflow")))
     }
 
     fn handle_sub(&mut self) -> Result<()> {
-        self.handle_prim_binary(|l, r| l.checked_sub(r).ok_or(anyhow!("overflow")))
+        self.handle_prim_binary_whnf_numerical(|l, r| l.checked_sub(r).ok_or(anyhow!("overflow")))
     }
 
     fn handle_mul(&mut self) -> Result<()> {
-        self.handle_prim_binary(|l, r| l.checked_mul(r).ok_or(anyhow!("overflow")))
+        self.handle_prim_binary_whnf_numerical(|l, r| l.checked_mul(r).ok_or(anyhow!("overflow")))
     }
 
     fn handle_div(&mut self) -> Result<()> {
-        self.handle_prim_binary(|l, r| l.checked_div(r).ok_or(anyhow!("overflow/divide by zero")))
+        self.handle_prim_binary_whnf_numerical(|l, r| {
+            l.checked_div(r).ok_or(anyhow!("overflow/divide by zero"))
+        })
     }
 
     fn handle_prim_binary_boolean<F>(&mut self, f: F) -> Result<()>
     where
         F: Fn(bool, bool) -> bool,
     {
-        self.handle_prim_binary(
-            |l, r| match (Self::unbox_boolean(l), Self::unbox_boolean(r)) {
-                (Some(l), Some(r)) => Ok(Self::box_boolean(f(l, r))),
-                _ => Err(anyhow!(
-                    "lhs or rhs is not boxed boolean: lhs {}, rhs {}",
-                    l,
-                    r
-                )),
-            },
-        )
+        self.handle_prim_binary_whnf(|l, r| {
+            let (b_l, b_r) = try {
+                let l = l.unbox_boolean()?;
+                let r = r.unbox_boolean()?;
+                (l, r)
+            }
+            .ok_or(anyhow!(
+                "lhs or rhs is not boxed boolean: lhs {:?}, rhs {:?}",
+                l,
+                r
+            ))?;
+            Ok(WHNFData::box_boolean(f(b_l, b_r)))
+        })
     }
 
     // FIXME: how about short circuiting.....
@@ -588,7 +656,19 @@ impl Machine {
     where
         F: Fn(i64, i64) -> bool,
     {
-        self.handle_prim_binary(|l, r| Ok(Self::box_boolean(f(l, r))))
+        self.handle_prim_binary_whnf(|l, r| {
+            let (n_l, n_r) = try {
+                let l = l.expect_num()?;
+                let r = r.expect_num()?;
+                (l, r)
+            }
+            .ok_or(anyhow!(
+                "lhs and/or rhs were not num: lhs {:?}, rhs {:?}",
+                l,
+                r
+            ))?;
+            Ok(WHNFData::box_boolean(f(n_l, n_r)))
+        })
     }
 
     fn handle_eq(&mut self) -> Result<()> {
@@ -724,30 +804,11 @@ impl Machine {
 
     // Helpers
 
-    // FIXME: constr please
-    fn box_boolean(b: bool) -> i64 {
-        match b {
-            true => 1,
-            false => 0,
-        }
-    }
-
-    fn unbox_boolean(x: i64) -> Option<bool> {
-        match x {
-            0 => Some(false),
-            1 => Some(true),
-            _ => None,
-        }
-    }
-
     fn unbox_boolean_at(&self, a: Addr) -> Result<bool> {
         let node = self.must_access_node(a);
         try {
-            let i = match node {
-                Node::Num(i) => Some(*i),
-                _ => None,
-            }?;
-            let res = Self::unbox_boolean(i)?;
+            let d = WHNFData::from_node(node.clone())?;
+            let res = d.unbox_boolean()?;
             res
         }
         .ok_or(anyhow!("unrecognized boolean: node {:?} at {:?}", node, a))

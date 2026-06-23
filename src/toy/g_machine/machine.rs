@@ -1321,7 +1321,7 @@ mod tests {
         }
     }
 
-    mod structual {
+    mod structural {
         use super::*;
 
         #[test]

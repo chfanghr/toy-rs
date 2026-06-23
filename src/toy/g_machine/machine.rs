@@ -216,6 +216,7 @@ impl Machine {
                 self.handle_case_jump(alts).context("CaseJump")
             }
             Instruction::Split(n) => self.handle_split(n).context("Split"),
+            Instruction::Abort => self.handle_abort().context("Abort"),
         }
     }
 
@@ -800,6 +801,12 @@ impl Machine {
             .for_each(|addr| self.current.stack.push(addr));
 
         Ok(())
+    }
+
+    fn handle_abort(&mut self) -> Result<()> {
+        self.current.instructions.pop_front();
+
+        Err(anyhow!("user code aborts"))
     }
 
     // Helpers

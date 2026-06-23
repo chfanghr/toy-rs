@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     g_machine::{
         compiler::{self, PRIM_LAZY_IF},
-        types::CompiledProgram,
+        types::{Code, CompiledProgram, Instruction},
     },
     parser::{
         PRIM_ADD_NAME, PRIM_BOOLEAN_AND_NAME, PRIM_BOOLEAN_OR_NAME, PRIM_DIV_NAME, PRIM_EQ_NAME,
@@ -62,7 +62,12 @@ fn all() -> ast::Program<ast::Name> {
 }
 
 fn all_compiled() -> CompiledProgram {
-    compiler::p(&all())
+    let mut c = compiler::p(&all());
+    _ = c.0.try_insert(
+        ast::Name::new("abort"),
+        (0, Code::new(vec![Instruction::Abort])),
+    );
+    c
 }
 
 pub fn link_with_prelude(c: CompiledProgram) -> CompiledProgram {

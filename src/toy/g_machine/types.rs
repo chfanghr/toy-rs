@@ -39,6 +39,8 @@ pub enum Instruction {
     PushPack(u64, usize),
     CaseJump(IntMap<u64 /* tag */, StackSafe<Code>> /* branches */),
     Split(usize),
+
+    Abort,
 }
 
 impl Instruction {
@@ -170,6 +172,7 @@ impl Instruction {
             Instruction::Split(n_fields) => {
                 a.concat([a.text("Split"), a.space(), a.as_string(n_fields)])
             }
+            Instruction::Abort => a.text("Stop"),
         }
     }
 }

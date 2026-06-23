@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use monoid::Monoid;
 use pretty::{DocAllocator, DocBuilder};
 use serde::{Deserialize, Serialize};
 use stacksafe::StackSafe;
@@ -102,16 +101,6 @@ pub struct SuperCombinator<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Program<T>(pub Vec<SuperCombinator<T>>);
-
-impl<T> Monoid for Program<T> {
-    fn id() -> Self {
-        Self(vec![])
-    }
-
-    fn op(self, other: Self) -> Self {
-        Self(self.0.into_iter().chain(other.0).collect())
-    }
-}
 
 pub fn ap_chain(exprs: Vec<Expr<Name>>) -> Expr<Name> {
     match exprs.len() {

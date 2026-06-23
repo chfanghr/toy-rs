@@ -146,7 +146,7 @@ impl Machine {
         let mut heap = Heap::new();
         let mut globals = HashMap::new();
 
-        for (name, (n_args, code)) in p.0.into_iter() {
+        for (name, (n_args, code)) in p.into_iter() {
             let addr = heap.alloc(Node::Global(n_args, code));
             globals.insert(GlobalEntry::Name(name), addr);
         }

@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::{
     g_machine::{
         compiler::{self, PRIM_LAZY_IF},
@@ -98,47 +96,27 @@ fn all() -> ast::Program<ast::Name> {
 }
 
 fn all_compiled() -> CompiledProgram {
-    let mut c = compiler::p(&all());
-    _ = c.0.try_insert(
+    compiler::p(&all())
+}
+
+fn manual() -> CompiledProgram {
+    CompiledProgram::new([(
         ast::Name::new("abort"),
         (0, Code::new(vec![Instruction::Abort])),
-    );
-    c
+    )])
+    .unwrap()
 }
 
 pub fn link_with_prelude(c: CompiledProgram) -> CompiledProgram {
-    let c_len = c.0.len();
-
-    let p = all_compiled();
-    let p_len = p.0.len();
-
-    let o = p.0.into_iter().chain(c.0).collect::<BTreeMap<_, _>>();
-
-    assert_eq!(o.len(), c_len + p_len);
-
-    CompiledProgram::new(o)
+    CompiledProgram::union_all([c, all_compiled(), manual()]).unwrap()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
 
     #[test]
     fn prelude_can_compile() {
         let _ = dbg!(all_compiled());
-    }
-
-    #[test]
-    fn btree_map_dup_keys() {
-        assert_eq!(
-            *([("a", 0), ("a", 1)]
-                .into_iter()
-                .collect::<BTreeMap<&str, usize>>()
-                .get("a")
-                .unwrap()),
-            1
-        );
     }
 }

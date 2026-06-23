@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, rc::Rc};
 
+use anyhow::{Result, anyhow};
 use intmap::IntMap;
+use itertools::Itertools;
 use pretty::{DocAllocator, DocBuilder};
 use stacksafe::{StackSafe, stacksafe};
 
@@ -197,11 +199,45 @@ impl Code {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct CompiledProgram(pub(super) BTreeMap<ast::Name, (usize, Code)>);
+pub struct CompiledProgram(BTreeMap<ast::Name, (usize, Code)>);
 
 impl CompiledProgram {
-    pub fn new(btree_map: BTreeMap<ast::Name, (usize, Code)>) -> Self {
-        Self(btree_map)
+    pub fn id() -> Self {
+        CompiledProgram(BTreeMap::new())
+    }
+
+    pub fn new(scs: impl IntoIterator<Item = (ast::Name, (usize, Code))>) -> Result<Self> {
+        scs.into_iter()
+            .sorted_by(|l, r| l.0.cmp(&r.0))
+            .dedup_by_with_count(|l, r| &l.0 == &r.0)
+            .map(|(count, (k, x))| {
+                if count > 1 {
+                    Err(anyhow!("duplicate supercombinator {:?}", k))
+                } else {
+                    Ok((k, x))
+                }
+            })
+            .collect::<Result<BTreeMap<ast::Name, (usize, Code)>>>()
+            .map(Self)
+    }
+
+    pub fn try_union(self, other: Self) -> Result<Self> {
+        Self::new(self.0.into_iter().chain(other.0))
+    }
+
+    pub fn union_all(i: impl IntoIterator<Item = Self>) -> Result<Self> {
+        i.into_iter()
+            .try_fold(Self::id(), |acc, x| acc.try_union(x))
+    }
+}
+
+impl IntoIterator for CompiledProgram {
+    type Item = (ast::Name, (usize, Code));
+
+    type IntoIter = <BTreeMap<ast::Name, (usize, Code)> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 

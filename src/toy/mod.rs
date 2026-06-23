@@ -1,7 +1,6 @@
 #![feature(try_blocks)]
 #![feature(trait_alias)]
 #![feature(deque_extend_front)]
-#![feature(map_try_insert)]
 
 pub mod g_machine;
 pub mod lambda_lifter;

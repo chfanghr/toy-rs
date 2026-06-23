@@ -1309,9 +1309,9 @@ mod tests {
                 ExpectedResult::Num(120),
             )?;
             assert_eval_result(
-                "gcd a b = if a == b 
-                                      then a 
-                                      else if a < b 
+                "gcd a b = if a == b
+                                      then a
+                                      else if a < b
                                             then gcd b a
                                             else gcd b (a - b);
                           main = gcd 6 10",
@@ -1337,7 +1337,7 @@ mod tests {
         #[test]
         fn pattern_matching() -> Result<()> {
             assert_eval_result(
-                "sum xs = case xs of 
+                "sum xs = case xs of
                                     [0] -> 0;
                                     [1] x xs -> x + sum xs;
                           nil = Pack{0,0};
@@ -1358,7 +1358,7 @@ mod tests {
                           evenNums = evens nums;
                           index i xs = case xs of
                                         [0] -> abort;
-                                        [1] x xs -> if i == 0 then x else index (i - 1) xs; 
+                                        [1] x xs -> if i == 0 then x else index (i - 1) xs;
                           nil = Pack{0,0};
                           cons = Pack{1,2};
                           main = index 25 evenNums

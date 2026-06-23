@@ -418,8 +418,8 @@ mod tests {
     #[test]
     fn sc_prim_if_then_else() {
         assert_instr_sequence_test(
-            "_prim_if_then_else pred thenBranch elseBranch = 
-                        if pred then thenBranch else elseBranch 
+            "_prim_if_then_else pred thenBranch elseBranch =
+                        if pred then thenBranch else elseBranch
                 ",
             vec![
                 Push(0), // predicate
@@ -485,9 +485,9 @@ mod tests {
     #[test]
     fn nested_let_binds() {
         assert_instr_sequence_test(
-            "nestedLetBinds f = 
-                    letrec x = f x in 
-                        let y = x in 
+            "nestedLetBinds f =
+                    letrec x = f x in
+                        let y = x in
                             x + y",
             vec![
                 Alloc(1),  // allocate x
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn if_then_else() {
         assert_instr_sequence_test(
-            "ifThenElse = 
+            "ifThenElse =
                 let bind1=if true && false then 42 + 1 else 69;
                     bind2=if true || false false then 42 else 69
                     in if bind1 > bind2 then 0 else 1
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn index() {
         assert_instr_sequence_test(
-            "index i xs = case xs of 
+            "index i xs = case xs of
                                         [0] -> abort;
                                         [1] x xs -> if i == 0 then x else index (i - 1) xs",
             vec![
@@ -690,7 +690,7 @@ mod tests {
         assert_instr_sequence_test(
             "length l = case l of
                     [0] -> 0;
-                    [1] x xs -> 1 + length xs 
+                    [1] x xs -> 1 + length xs
                  ",
             vec![
                 Push(0),

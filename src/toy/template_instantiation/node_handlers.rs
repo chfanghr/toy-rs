@@ -2,6 +2,7 @@ use super::machine::*;
 use crate::parser::ast;
 use crate::utils::{assoc::Assoc, heap::Addr};
 use anyhow::{Result, anyhow, bail};
+use stacksafe::stacksafe;
 
 impl Machine {
     pub(super) fn dispatch_node(&mut self, node_addr: Addr, node: Node) -> Result<()> {
@@ -79,6 +80,7 @@ impl Machine {
         Ok(())
     }
 
+    #[stacksafe]
     fn instantiate(
         &mut self,
         env: &Assoc<ast::Name, Addr>,
@@ -150,7 +152,7 @@ impl Machine {
             )),
             // HACK: could we instantiate directly please
             ast::Expr::IfThenElse(i) => {
-                let i = i.clone();
+                let i = i.clone().into_inner();
                 let expr = ast::ap_chain(vec![
                     ast::Expr::Var(ast::Name::new(PrimOpKind::IfThenElse.to_name().unwrap())),
                     i.pred,

@@ -7,6 +7,7 @@ use chumsky::{
     pratt::{infix, left, none, right},
     prelude::{any, choice, end, just, recursive},
 };
+use stacksafe::StackSafe;
 
 use crate::{
     lexer::{self, tokens::*},
@@ -340,12 +341,14 @@ fn if_then_else<'src>(
         })
 }
 
-fn apply_boxed<T, R>(f: impl Fn(Box<T>) -> R) -> impl Fn(T) -> R {
-    move |x| f(Box::new(x))
+fn apply_boxed<T, R>(f: impl Fn(Box<StackSafe<T>>) -> R) -> impl Fn(T) -> R {
+    move |x| f(Box::new(StackSafe::new(x)))
 }
 
 #[cfg(test)]
 mod tests {
+
+    use stacksafe::StackSafe;
 
     use crate::lexer;
 
@@ -398,16 +401,16 @@ mod tests {
     fn test_ap_chain() {
         assert_parse!(
             expr(),
-            Expr::Ap(Box::new(Application {
+            Expr::Ap(Box::new(StackSafe::new(Application {
                 l: Expr::Var(Name::new("i")),
-                r: Expr::Ap(Box::new(Application {
+                r: Expr::Ap(Box::new(StackSafe::new(Application {
                     l: Expr::Var(Name::new("i")),
-                    r: Expr::Ap(Box::new(Application {
+                    r: Expr::Ap(Box::new(StackSafe::new(Application {
                         l: Expr::Var(Name::new("i")),
                         r: Expr::Num(Integer(42))
-                    }))
-                }))
-            })),
+                    })))
+                })))
+            }))),
             "i(i (i 42))"
         );
     }

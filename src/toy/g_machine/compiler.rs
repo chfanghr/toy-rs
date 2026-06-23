@@ -113,6 +113,7 @@ fn match_saturated_constr<'a>(
     Some((tag, arity, es))
 }
 
+#[stacksafe]
 fn un_ap_chain<'a>(e: &'a ast::Expr<ast::Name>) -> Option<NonEmpty<&'a ast::Expr<ast::Name>>> {
     let mut e = e;
     let mut out = VecDeque::new();
@@ -233,7 +234,7 @@ pub const PRIM_LAZY_IF: &str = "_prim_if";
 
 fn mk_ap_chain(es: Vec<ast::Expr<ast::Name>>) -> ast::Expr<ast::Name> {
     es.into_iter()
-        .reduce(|acc, a| ast::Expr::Ap(Box::new(ast::Application { l: acc, r: a })))
+        .reduce(|acc, a| ast::Expr::Ap(Box::new(StackSafe::new(ast::Application { l: acc, r: a }))))
         .unwrap()
 }
 

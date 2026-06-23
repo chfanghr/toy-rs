@@ -1331,24 +1331,6 @@ mod tests {
                 "main = let x = Pack{1, 0} in x",
                 ExpectedResult::Constr(1, vec![]),
             )?;
-
-            // FIXME: this doesn't work for now bcs we only evaluate main to WHNF
-            // fn mk_nil() -> ExpectedResult {
-            //     ExpectedResult::Constr(0, vec![])
-            // }
-            // fn mk_cons(x: i64, rest: ExpectedResult) -> ExpectedResult {
-            //     ExpectedResult::Constr(
-            //         1,
-            //         vec![StackSafe::new(ExpectedResult::Num(x)), StackSafe::new(rest)],
-            //     )
-            // }
-
-            // assert_eval_result(
-            //     "main = let nil = Pack{0, 0};
-            //                          cons = Pack{1, 2}
-            //                         in cons 1 (force (cons 2 (force (cons 3 nil))))",
-            //     mk_cons(1, mk_cons(2, mk_cons(3, mk_nil()))),
-            // );
             Ok(())
         }
 
@@ -1364,6 +1346,24 @@ mod tests {
                           main = sum l
                          ",
                 ExpectedResult::Num(6),
+            )?;
+            assert_eval_result(
+                "numsInner x = cons x (numsInner (x + 1));
+                          nums = numsInner 0;
+                          evens xs = case xs of
+                                        [0] -> nil;
+                                        [1] x xs -> case xs of
+                                            [0] -> cons x nil;
+                                            [1] y xs -> cons x (evens xs);
+                          evenNums = evens nums;
+                          index i xs = case xs of
+                                        [0] -> abort;
+                                        [1] x xs -> if i == 0 then x else index (i - 1) xs; 
+                          nil = Pack{0,0};
+                          cons = Pack{1,2};
+                          main = index 25 evenNums
+                         ",
+                ExpectedResult::Num(50),
             )?;
             Ok(())
         }

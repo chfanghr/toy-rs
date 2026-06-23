@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fmt::format,
     iter, mem,
     ops::Deref,
 };
@@ -1089,7 +1088,7 @@ impl Iterator for MachineIterInternal {
 mod tests {
     use std::env;
 
-    use anyhow::{Context, Result, bail, ensure};
+    use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
     use chumsky::Parser;
     use lazy_static::lazy_static;
     use pretty::Arena;
@@ -1167,67 +1166,80 @@ mod tests {
     }
 
     // Assuming that the entry point is called "main"
-    fn assert_eval_result(program: &str, expected: ExpectedResult) {
+    fn assert_eval_result(program: &str, expected: ExpectedResult) -> Result<()> {
         let entry_point = ast::Name::new("main");
-        let tokens = token_vec().parse(program).unwrap();
-        let ast = parser().parse(&tokens).unwrap();
+        let tokens = token_vec()
+            .parse(program)
+            .into_result()
+            .map_err(|errs| anyhow!("{:?}", errs).context("tokenize"))?;
+        let ast = parser()
+            .parse(&tokens)
+            .into_result()
+            .map_err(|errs| anyhow!("{:?}", errs).context("parse"))?;
         let compiled = p(&ast);
         let compiled = link_with_prelude(compiled);
         let mut machine = Machine::new(compiled, entry_point.clone());
         let machine = if *DEBUG {
             MachineIter::new(machine)
-                .map(|m| {
-                    let m = m.unwrap();
+                .map(|m| -> Result<_, _> {
+                    let m = m?;
                     let a = Arena::<()>::new();
                     println!("==================\n{}", m.pp(&a).pretty(80));
-                    m
+                    Ok(m)
                 })
                 .last()
                 .unwrap()
         } else {
-            machine.run().unwrap();
-            machine
-        };
-        let node = machine.inspect_global(entry_point.clone()).unwrap();
-        check_result(&machine, &node, StackSafe::new(expected)).unwrap();
+            machine.run()?;
+            Ok(machine)
+        }
+        .context("running")?;
+        let node = machine
+            .inspect_global(entry_point.clone())
+            .context("inspect-main")?;
+        check_result(&machine, &node, StackSafe::new(expected)).context("check-result")?;
+        Ok(())
     }
 
     #[test]
-    fn basic() {
-        assert_eval_result("main = i 42", ExpectedResult::Num(42));
+    fn basic() -> Result<()> {
+        assert_eval_result("main = i 42", ExpectedResult::Num(42))?;
         assert_eval_result(
             "i1 = s k k;
                       main = i1 42",
             ExpectedResult::Num(42),
-        );
-        assert_eval_result("main = twice twice twice i 42", ExpectedResult::Num(42));
+        )?;
+        assert_eval_result("main = twice twice twice i 42", ExpectedResult::Num(42))?;
+        Ok(())
     }
 
     #[test]
-    fn update() {
-        assert_eval_result("main = twice (i i i) 42", ExpectedResult::Num(42));
+    fn update() -> Result<()> {
+        assert_eval_result("main = twice (i i i) 42", ExpectedResult::Num(42))?;
+        Ok(())
     }
 
     mod arithmetic {
         use super::*;
 
         #[test]
-        fn unconditional() {
-            assert_eval_result("main = 21*2 + (2/2 - 1)", ExpectedResult::Num(42));
+        fn unconditional() -> Result<()> {
+            assert_eval_result("main = 21*2 + (2/2 - 1)", ExpectedResult::Num(42))?;
             assert_eval_result(
                 "incr x = x + 1;
                           main = twice twice incr 0",
                 ExpectedResult::Num(4),
-            );
+            )?;
+            Ok(())
         }
 
         #[test]
-        fn conditional() {
+        fn conditional() -> Result<()> {
             assert_eval_result(
                 "fac x = if x == 0 then 1 else x*fac (x - 1);
                           main = fac 5",
                 ExpectedResult::Num(120),
-            );
+            )?;
             assert_eval_result(
                 "gcd a b = if a == b 
                                       then a 
@@ -1236,7 +1248,8 @@ mod tests {
                                             else gcd b (a - b);
                           main = gcd 6 10",
                 ExpectedResult::Num(2),
-            );
+            )?;
+            Ok(())
         }
     }
 
@@ -1244,12 +1257,12 @@ mod tests {
         use super::*;
 
         #[test]
-        fn packs() {
-            assert_eval_result("main = Pack{1, 0}", ExpectedResult::Constr(1, vec![]));
+        fn packs() -> Result<()> {
+            assert_eval_result("main = Pack{1, 0}", ExpectedResult::Constr(1, vec![]))?;
             assert_eval_result(
                 "main = let x = Pack{1, 0} in x",
                 ExpectedResult::Constr(1, vec![]),
-            );
+            )?;
 
             // FIXME: this doesn't work for now bcs we only evaluate main to WHNF
             // fn mk_nil() -> ExpectedResult {
@@ -1268,10 +1281,11 @@ mod tests {
             //                         in cons 1 (force (cons 2 (force (cons 3 nil))))",
             //     mk_cons(1, mk_cons(2, mk_cons(3, mk_nil()))),
             // );
+            Ok(())
         }
 
         #[test]
-        fn pattern_matching() {
+        fn pattern_matching() -> Result<()> {
             assert_eval_result(
                 "sum xs = case xs of 
                                     [0] -> 0;
@@ -1282,7 +1296,8 @@ mod tests {
                           main = sum l
                          ",
                 ExpectedResult::Num(6),
-            );
+            )?;
+            Ok(())
         }
     }
 }

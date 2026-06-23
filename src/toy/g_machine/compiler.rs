@@ -239,13 +239,12 @@ fn mk_ap_chain(es: Vec<ast::Expr<ast::Name>>) -> ast::Expr<ast::Name> {
 
 fn e_case_of(case_of: &ast::Case<ast::Name>, env: Env) -> Vec<Instruction> {
     let scru_code = e(&case_of.scru, env.clone());
-    let env = offset_env_by(env, 1);
     let n_branches = case_of.branches.len();
     let alts = case_of
         .branches
         .iter()
         .map(|b| {
-            let (tag, code) = a(b, env.clone());
+            let (tag, code) = a(b, offset_env_by(env.clone(), b.bound_fields.len()));
             (tag, StackSafe::new(Code::new(code)))
         })
         .collect::<IntMap<_, _>>();
@@ -281,12 +280,12 @@ fn c(expr: &ast::Expr<ast::Name>, env: Env) -> Vec<Instruction> {
     }
 }
 
-fn offset_env_by(env: Env, n: isize) -> Env {
+fn offset_env_by(env: Env, n: usize) -> Env {
     let mut env = env;
     let env_mut = Rc::make_mut(&mut env);
     env_mut
         .values_mut()
-        .for_each(|x| *x = x.checked_add_signed(n).unwrap());
+        .for_each(|x| *x = x.checked_add(n).unwrap());
     env
 }
 
@@ -322,7 +321,7 @@ where
     move |l, env| {
         let n_defs = l.definitions.len();
         let (env, mut code) = if l.is_recursive {
-            let mut env = offset_env_by(env, isize::try_from(n_defs).unwrap());
+            let mut env = offset_env_by(env, n_defs);
             let env_mut = Rc::make_mut(&mut env);
             let bs = l
                 .definitions
@@ -626,6 +625,63 @@ mod tests {
                 &ast::Expr::Num(ast::Integer(2))
             ]),
             un_ap_chain(&must_lex_and_parse_sc("main = 1 + 2").body)
+        );
+    }
+
+    #[test]
+    fn index() {
+        assert_instr_sequence_test(
+            "index i xs = case xs of 
+                                        [0] -> abort;
+                                        [1] x xs -> if i == 0 then x else index (i - 1) xs",
+            vec![
+                Push(1),
+                Eval,
+                CaseJump(
+                    [
+                        (
+                            0,
+                            StackSafe::new(Code::new(vec![
+                                Split(0),
+                                PushGlobal(Name::new("abort")),
+                                Eval,
+                                Slide(0),
+                            ])),
+                        ),
+                        (
+                            1,
+                            StackSafe::new(Code::new(vec![
+                                Split(2),
+                                PushNum(0),
+                                Push(3),
+                                Eval,
+                                Eq,
+                                Branch(
+                                    StackSafe::new(Code::new(vec![Push(0), Eval])),
+                                    StackSafe::new(Code::new(vec![
+                                        Push(1),
+                                        PushNum(1),
+                                        Push(4),
+                                        PushGlobal(Name::new("_prim_sub")),
+                                        MkAp,
+                                        MkAp,
+                                        PushGlobal(Name::new("index")),
+                                        MkAp,
+                                        MkAp,
+                                        Eval,
+                                    ])),
+                                ),
+                                Slide(2),
+                            ])),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                Update(2),
+                Pop(2),
+                Unwind,
+            ],
         );
     }
 

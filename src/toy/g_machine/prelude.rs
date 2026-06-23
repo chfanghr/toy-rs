@@ -100,10 +100,26 @@ fn all_compiled() -> CompiledProgram {
 }
 
 fn manual() -> CompiledProgram {
-    CompiledProgram::new([(
-        ast::Name::new("abort"),
-        (0, Code::new(vec![Instruction::Abort])),
-    )])
+    CompiledProgram::new([
+        (
+            ast::Name::new("abort"),
+            (0, Code::new(vec![Instruction::Abort])),
+        ),
+        (
+            ast::Name::new("seq"),
+            (
+                2,
+                Code::new(vec![
+                    Instruction::Push(0),
+                    Instruction::Eval,
+                    Instruction::Update(2),
+                    Instruction::Pop(1),
+                    Instruction::Slide(1),
+                    Instruction::Unwind,
+                ]),
+            ),
+        ),
+    ])
     .unwrap()
 }
 

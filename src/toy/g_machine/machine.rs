@@ -1361,4 +1361,24 @@ mod tests {
             Ok(())
         }
     }
+
+    #[test]
+    fn seq() -> Result<()> {
+        fn expect_nil() -> ExpectedResult {
+            ExpectedResult::Constr(0, vec![])
+        }
+        fn expect_cons(x: i64, xs: ExpectedResult) -> ExpectedResult {
+            ExpectedResult::Constr(
+                1,
+                vec![StackSafe::new(ExpectedResult::Num(x)), StackSafe::new(xs)],
+            )
+        }
+        assert_eval_result(
+            "forceCons x xs = seq x (seq xs (cons x xs));
+                main = forceCons 1 (forceCons 2 (forceCons 3 nil))",
+            expect_cons(1, expect_cons(2, expect_cons(3, expect_nil()))),
+        )?;
+
+        Ok(())
+    }
 }
